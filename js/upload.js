@@ -12,9 +12,13 @@ const emit = () => listeners.forEach((fn) => fn());
 let running = false;
 let current = null;
 
-export function addFiles(files, targetPath, { force = false } = {}) {
+/**
+ * Dateien in die Warteschlange. targetPath = Ordner in pCloud. after(item): wird nach dem Hochladen aufgerufen
+ * (z. B. Auftrag an den PC, die Datei aus dem Eingang auf den Speicher zu verschieben). label = Zielname für die Anzeige.
+ */
+export function addFiles(files, targetPath, { force = false, after = null, label = null } = {}) {
   for (const file of files) {
-    queue.push({ id: uid(), file, name: file.name || 'Datei', targetPath, status: 'wartet', loaded: 0, total: file.size, force, state: {}, tries: 0 });
+    queue.push({ id: uid(), file, name: file.name || 'Datei', targetPath, label: label || targetPath, after, status: 'wartet', loaded: 0, total: file.size, force, state: {}, tries: 0 });
   }
   emit();
   run();
@@ -112,7 +116,7 @@ async function process(item) {
     if (same && same.size === item.file.size && !item.force) {
       item.status = 'übersprungen';
       item.message = 'Liegt schon in diesem Ordner';
-      await register(item, item.targetPath);
+      await register(item, item.label);
       return;
     }
     if (!item.finalName) item.finalName = uniqueName(item.name, new Set(folder.items.map((x) => x.name.toLowerCase())));
@@ -132,7 +136,8 @@ async function process(item) {
     item.status = 'fertig';
     item.message = item.finalName !== item.name ? `Gespeichert als „${item.finalName}“` : '';
     folder.items.push({ name: item.finalName, isFolder: false, size: item.file.size, ...(meta || {}) });
-    await register(item, item.targetPath);
+    await register(item, item.label);
+    if (item.after) { try { await item.after(item); } catch (e) { item.message = 'Hochgeladen, aber: ' + e.message; } }
   } catch (e) {
     if (e.name === 'AbortError' && item.message === 'Abgebrochen') return;
     item.tries++;

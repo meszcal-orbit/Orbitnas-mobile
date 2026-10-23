@@ -144,32 +144,74 @@ export class DemoBackend {
 }
 
 export function demoStatus() {
+  const ago = (ms) => new Date(now - ms).toISOString();
   return {
-    v: 1, generated: new Date(now - 6 * 60000).toISOString(), pc: 'PC (Beispiel)', appVersion: '0.5.1',
+    v: 1, schema: 2, generated: ago(6 * 60000), pc: 'PC (Beispiel)', appVersion: '0.6.0',
+    design: { theme: 'Orbit', accent: '#6366F1', dark: true },
+    backupDeviceText: 'Sichert automatisch: PC (Beispiel) · täglich um 02:00',
     running: null,
-    lastBackup: { time: new Date(now - 16 * 3600000).toISOString(), ok: true, message: '' },
+    lastBackup: { time: ago(16 * 3600000), ok: true, message: '' },
     nextBackup: new Date(now + 8 * 3600000).toISOString(),
+    device: {
+      name: 'PC (Beispiel)', backsUp: true, dailyBackupTime: '02:00', runMode: 'Background', preapprove: false, thoroughCheck: true,
+      storagePath: 'D:\\Daten', storageOk: true, storageMessage: 'Speicher erreichbar und beschreibbar.', rclone: { installed: '1.73.1', latest: '1.73.1' },
+    },
     locations: [
-      { id: 'storage', name: 'Speicher', kind: 'storage', type: '', used: 1.31e12, total: 2e12, free: 0.69e12, online: true },
-      { id: 'demo-pcloud', name: 'pCloud', kind: 'cloud', type: 'PCloud', used: 812e9, total: 2e12, free: 1.188e12, online: true, primary: true },
-      { id: 'demo-fritz', name: 'FRITZ!NAS', kind: 'disk', type: 'LocalFolder', used: 610e9, total: 1e12, free: 390e9, online: true },
-      { id: 'demo-internxt', name: 'Internxt', kind: 'cloud', type: 'Internxt', used: 1.1e12, total: 5e12, free: 3.9e12, online: true },
+      { id: 'storage', name: 'Festplatte (D:)', kind: 'storage', type: '', used: 1.31e12, total: 2e12, free: 0.69e12, online: true, color: '#0EA5E9' },
+      { id: 'demo-fritz', name: 'FRITZ!NAS', kind: 'disk', type: 'LocalFolder', used: 610e9, total: 1e12, free: 390e9, online: true, color: '#E11D48' },
+      { id: 'demo-pcloud', name: 'pCloud', kind: 'cloud', type: 'PCloud', used: 812e9, total: 2e12, free: 1.188e12, online: true, primary: true, color: '#7C3AED' },
+      { id: 'demo-internxt', name: 'Internxt', kind: 'cloud', type: 'Internxt', used: 1.1e12, total: 5e12, free: 3.9e12, online: true, color: '#10B981' },
+    ],
+    operations: [
+      { id: 'op1', title: 'Sichern: Fotos', status: 'Fertig', tone: 'Ok', step: 'Fertig', percent: 100, bytesText: '1,2 GB', speedText: '', etaText: '', currentFile: '', message: '312 Dateien übertragen.', fromPhone: false },
+    ],
+    connections: [
+      { id: 'demo-pcloud', name: 'pCloud', type: 'PCloud', typeText: 'pCloud', detail: 'OrbitNAS', spaceText: '812 GB von 2 TB belegt', status: 'Verbindung in Ordnung', tone: 'Ok', primary: true, canBePrimary: true },
+      { id: 'demo-fritz', name: 'FRITZ!NAS', type: 'LocalFolder', typeText: 'Festplatte / Ordner', detail: '\\\\fritz.box\\FRITZ.NAS\\USB', spaceText: '610 GB von 1 TB belegt', status: 'Bereit', tone: 'Muted', primary: false, canBePrimary: false },
+      { id: 'demo-internxt', name: 'Internxt', type: 'Internxt', typeText: 'Internxt', detail: 'OrbitNAS', spaceText: '1,1 TB von 5 TB belegt', status: 'Verbindung in Ordnung', tone: 'Ok', primary: false, canBePrimary: true },
     ],
     folders: [
-      { id: 'f1', name: 'Fotos', path: 'Fotos', mode: 'Mirrored', targets: ['demo-pcloud', 'demo-fritz'], lastSuccess: new Date(now - 16 * 3600000).toISOString(), lastError: null },
-      { id: 'f2', name: 'Dokumente', path: 'Dokumente', mode: 'Mirrored', targets: ['demo-pcloud'], lastSuccess: new Date(now - 16 * 3600000).toISOString(), lastError: null },
-      { id: 'f3', name: 'Filme', path: 'Filme', mode: 'CloudOnly', targets: ['demo-internxt'], lastSuccess: new Date(now - 9 * day).toISOString(), lastError: null, offloadedBytes: 820e9, offloadedFiles: 214 },
-      { id: 'f4', name: 'Musik', path: 'Musik', mode: 'DiskOnly', targets: [], lastSuccess: null, lastError: null },
+      { id: 'f1', name: 'Fotos', path: 'Fotos', mode: 'Mirrored', targets: ['demo-pcloud', 'demo-fritz'], lastSuccess: ago(16 * 3600000), lastError: null, lastText: 'Gesichert: vor 16 Std.', canOffload: true, isManagedInside: false },
+      { id: 'f2', name: 'Dokumente', path: 'Dokumente', mode: 'Mirrored', targets: ['demo-pcloud'], lastSuccess: ago(16 * 3600000), lastError: null, lastText: 'Gesichert: vor 16 Std.', canOffload: true, isManagedInside: false },
+      { id: 'f3', name: 'Filme', path: 'Filme', mode: 'CloudOnly', targets: ['demo-internxt'], lastSuccess: ago(9 * day), lastError: null, offloadedBytes: 39.6e9, offloadedFiles: 4, lastText: 'Ausgelagert: 4 Dateien, 39,6 GB', canOffload: false, isManagedInside: false },
+      { id: 'f4', name: 'Musik', path: 'Musik', mode: 'DiskOnly', targets: [], lastSuccess: null, lastError: null, lastText: 'Keine Cloud-Sicherung', canOffload: false, isManagedInside: false },
     ],
     hidden: {},
+    ignored: { storage: ['Temp'] },
+    folderStyles: [{ location: 'storage', path: 'Musik', color: '#A855F7', icon: 'music' }],
     pin: null, pinIsPin: true, pinLength: 4,
     // Beispiel-Ordner-PIN für „Privat“: 1234
     locks: [{ location: 'storage', path: 'Privat', hash: 'pbkdf2-sha256$10000$MDEyMzQ1Njc4OWFiY2RlZg==$ixxYM1J8PQqA5j6d5jAkX8XLxDakMhAO4cNeFjzkuVE=', pinLength: 4 }],
     favorites: [
       { location: 'storage', path: 'Fotos/Urlaub 2026', name: 'Urlaub 2026', isFolder: true },
-      { location: 'demo-pcloud', path: 'Dokumente', name: 'Dokumente (pCloud)', isFolder: true },
+      { location: 'demo-pcloud', path: 'Dokumente', name: 'Dokumente', isFolder: true },
     ],
   };
+}
+
+export function demoLog() {
+  const t = (min) => new Date(now - min * 60000).toISOString();
+  return {
+    v: 1, generated: t(6),
+    lines: [
+      [t(600), 'Info', 'Programm', 'Orbit NAS 0.6.0 gestartet auf „PC (Beispiel)“.'],
+      [t(590), 'Info', 'Sicherung', 'Starte Sicherung: Fotos → pCloud, FRITZ!NAS'],
+      [t(560), 'Info', 'Sicherung', 'Fotos: 312 Dateien übertragen (1,2 GB).'],
+      [t(400), 'Warnung', 'Handy', 'Abgleich mit der Handy-App: pCloud war kurz nicht erreichbar, neuer Versuch in 2 Minuten.'],
+      [t(30), 'Fehler', 'Benachrichtigung', 'Beispiel für einen Fehler: Internxt meldet „zu viele Anfragen“. Wird später erneut versucht.'],
+      [t(6), 'Info', 'Handy', 'Status und Dateiliste für die Handy-App geschrieben.'],
+    ],
+  };
+}
+
+/** Antwort auf den Auftrag „liste“ für Orte ohne Index (hier: Internxt). */
+export function demoListe(location, path) {
+  const s = Math.round(now / 1000) - 90 * 86400;
+  if (location !== 'demo-internxt') return [];
+  if (!path) return [['OrbitNAS', 1, 0, s]];
+  if (path === 'OrbitNAS') return [['Filme', 1, 0, s]];
+  if (path === 'OrbitNAS/Filme') return [['Der Hobbit.mkv', 4, 12e9, s], ['Urlaub Norwegen.mp4', 4, 4.4e9, s], ['Hochzeit.mov', 4, 21e9, s], ['Konzert.mp4', 4, 2.2e9, s]];
+  return [];
 }
 
 export function demoIndex() {
@@ -187,6 +229,9 @@ export function demoIndex() {
   ['Der Hobbit.mkv', 'Urlaub Norwegen.mp4', 'Hochzeit.mov', 'Konzert.mp4'].forEach((n, i) => add(filme, n, 4, [12e9, 4.4e9, 21e9, 2.2e9][i], 90));
   const musik = add(-1, 'Musik', 1);
   for (let i = 0; i < 30; i++) add(musik, `Titel ${i + 1}.mp3`, 0, 8e6, 300);
+  add(docs, 'Neu eingescannt.pdf', 16, 640000, 0);
+  const temp = add(-1, 'Temp', 1);
+  add(temp, 'cache.tmp', 0, 1e6, 1);
   const privat = add(-1, 'Privat', 1);
   add(privat, 'Tagebuch.docx', 0, 200000, 9);
 
@@ -202,7 +247,7 @@ export function demoIndex() {
   return {
     v: 1, generated: new Date(now - 6 * 60000).toISOString(),
     locations: [
-      { id: 'storage', name: 'Speicher', kind: 'storage', e },
+      { id: 'storage', name: 'Festplatte (D:)', kind: 'storage', e },
       { id: 'demo-fritz', name: 'FRITZ!NAS', kind: 'disk', e: f },
     ],
   };

@@ -1,16 +1,20 @@
 // Gemeinsame Oberflächen-Einstellungen und Navigation.
 
 import { kv } from './db.js';
+import { applyDesign } from './theme.js';
 
-export const settings = { theme: 'auto', view: 'liste', sort: { by: 'name', dir: 1 }, showHidden: false, lastSource: null };
-export async function loadSettings() { Object.assign(settings, (await kv.get('settings')) || {}); applyTheme(); }
+export const settings = {
+  designFromPc: true, theme: 'Orbit', accent: null,   // eigenes Design nur, wenn designFromPc = false
+  tileView: false, sort: { by: 'name', dir: 1 }, showHidden: false, lastLocation: null, treeOpen: true, onlyProblems: false,
+};
+export async function loadSettings() { Object.assign(settings, (await kv.get('settings')) || {}); }
 export const saveSettings = () => kv.set('settings', JSON.parse(JSON.stringify(settings)));
 
-export function applyTheme() {
-  const t = settings.theme;
-  document.documentElement.dataset.theme = t === 'auto' ? '' : t;
-  const dark = t === 'orbit' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#0A0A16' : '#F3F4F7');
+/** Design anwenden: wie am PC (aus status.onm) oder eigenes. */
+export function applyTheme(status) {
+  const d = status?.design;
+  if (settings.designFromPc && d) applyDesign(d.theme, d.accent);
+  else applyDesign(settings.theme, settings.accent);
 }
 
 export function go(hash) {
@@ -30,4 +34,5 @@ export const filesHash = (loc, path = '') => '#/dateien/' + encodeURIComponent(l
 export const unlocked = new Set();
 
 export const isWide = () => matchMedia('(min-width: 768px)').matches;
+export const isLandscapeWide = () => matchMedia('(min-width: 1000px)').matches;
 export const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;

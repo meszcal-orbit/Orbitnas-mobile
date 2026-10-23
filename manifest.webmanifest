@@ -4,7 +4,7 @@
   "description": "Deine Dateien aus pCloud, vom PC und von der FRITZ!NAS",
   "lang": "de",
   "id": "./",
-  "start_url": "./#/start",
+  "start_url": "./#/dateien",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",

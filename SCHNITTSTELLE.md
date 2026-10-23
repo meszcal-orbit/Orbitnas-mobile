@@ -108,3 +108,85 @@ dort zeigt die App nur an bzw. schickt Aufträge. Verstecken in pCloud = Auftrag
 * `"locks": [ { "location":"storage", "path":"Privat", "hash":"pbkdf2-sha256$…", "pinLength":4 } ]` – PIN pro Ort/Ordner
   (path "" = ganzer Ort; gilt für alle Unterordner). Am Handy: nur Ansicht sperren, wie am PC.
 * `"favorites": [ { "location":"storage", "path":"Fotos/Urlaub", "name":"Urlaub", "isFolder":true } ]`.
+
+---
+
+# Schnittstelle v2 (PC 0.5.2 ↔ Mobil 2.0) – Ergänzungen, v1 bleibt gültig
+
+Ziel: Die Handy-App ist eine 1:1-Kopie des PC-Programms (Seiten Dateien, Sicherung, Protokoll, Einstellungen).
+`v` in allen Dateien bleibt **1** (nur neue Felder/Typen; unbekannte Felder ignorieren). Neu: `"schema": 2` in status.onm.
+
+## 9.1 status.onm – neue Felder
+
+```json
+"schema": 2,
+"design": { "theme": "Orbit", "accent": "#6366F1", "dark": true },      // aktuell angewandtes Design + Akzent (aufgelöst)
+"backupDeviceText": "Sichert automatisch: PC · täglich um 02:00",       // wie HomeView BackupDeviceText
+"device": { "name": "PC", "backsUp": true, "dailyBackupTime": "02:00", "runMode": "OnDemand|Background|Scheduled",
+            "preapprove": false, "thoroughCheck": true, "storagePath": "D:\\Daten", "storageOk": true, "storageMessage": "",
+            "rclone": { "installed": "1.73.1", "latest": "1.73.1" } },
+"operations": [ { "id": "…", "title": "Sichern: Fotos", "status": "Läuft|Wartet|Fertig|Fehler|Abgebrochen", "tone": "Accent|Ok|Warn|Danger",
+                  "step": "Übertrage …", "percent": 42.5, "bytesText": "1,2 GB von 3 GB", "speedText": "12 MB/s",
+                  "etaText": "noch 3 Min.", "currentFile": "IMG_1.jpg", "message": "", "fromPhone": true } ],   // wie HomeView „Vorgänge“, max. 10
+"connections": [ { "id": "<CloudConnection.Id>", "name": "pCloud", "type": "PCloud", "typeText": "pCloud",
+                   "detail": "OrbitNAS", "spaceText": "812 GB von 2 TB belegt", "status": "Verbindung in Ordnung",
+                   "tone": "Ok|Warn|Danger|Muted", "primary": true, "canBePrimary": true } ],
+"folders[]": zusätzlich { "lastText": "Gesichert: vor 2 Std.", "canOffload": true, "isManagedInside": false }
+```
+`running` aus v1 darf weiter gesendet werden (App nutzt `operations`, wenn vorhanden).
+
+## 9.2 index.onm – neues Flag
+
+`flags` 16 = **noch nicht gesichert** (orange am PC). Damit: 8 grün (gesichert), 16 orange, 4 blau (nur Cloud), keins grau.
+Index enthält wie bisher Speicher, LocalFolder-Verbindungen, weitere Orte. Andere Clouds (Internxt, Hetzner) nicht –
+die liest die App per Auftrag `liste`.
+
+## 9.3 protokoll.onm (AAD "protokoll")
+
+`{ "v":1, "generated":"…Z", "lines": [ ["2026-10-23T19:00:00Z", "Info|Warnung|Fehler", "Bereich", "Text"], … ] }` –
+letzte 500 Zeilen, neueste zuletzt. Schreiben: mit jeder status.onm, wenn sich das Protokoll geändert hat.
+
+## 9.4 Neue Aufträge (alle mit `location` = Id wie in status.locations, Pfade relativ mit "/")
+
+| type | args | Ergebnis |
+|---|---|---|
+| `liste` | `{ location, path }` | `entries: [[name, flags, size, mtime], …]` (flags wie Index) – für Orte ohne Index (Internxt …) und „Aktualisieren“ |
+| `kopieren` | `{ from: { location, path }, to: { location, folder } }` | wie Einfügen nach Kopieren am PC |
+| `verschieben` | `{ from: { location, path }, to: { location, folder } }` | wie Einfügen nach Ausschneiden |
+| `umbenennen` | `{ location, path, name }` | |
+| `loeschen` | `{ location, path }` | PC: Papierkorb; FRITZ!NAS endgültig (App fragt vorher mit diesem Hinweis) |
+| `ordnerNeu` | `{ location, path, name }` | path = Elternordner |
+| `favorit` | `{ location, path, name, isFolder, on }` | Favoriten-Liste des PCs (status.favorites) |
+| `pinSchutz` | `{ location, path, hash, pinLength }` | hash im Format des PasswordHasher (App rechnet PBKDF2-SHA256, 600 000 Runden) |
+| `pinEntfernen` | `{ location, path }` | App fragt vorher die Ordner-PIN ab |
+| `ordnerHinzufuegen` | `{ path, name, mode, targets: [connId] }` | wie Dialog „Ordner hinzufügen“ |
+| `ordnerBearbeiten` | `{ folderId, name, mode, targets }` | wie „Sicherung einstellen …“ (Moduswechsel löst am PC dieselben Abläufe/Prüfungen aus) |
+| `ordnerEntfernen` | `{ folderId }` | „Aus Orbit NAS entfernen (löscht keine Dateien)“ |
+| `verbindungTesten` | `{ connId }` | message = Status-Text |
+| `hauptCloud` | `{ connId }` | |
+| `einstellungen` | `{ dailyBackupTime?, runMode?, preapprove?, thoroughCheck?, backsUp? }` | nur angegebene Felder ändern |
+
+Mehrere Elemente = mehrere Aufträge. Geschützte Fälle (gesicherte Ordner, ausgelagerte Inhalte, PIN) → `state:"fehler"`
+mit verständlichem `message`, genau wie am PC. Ids: `[A-Za-z0-9_-]{1,64}` (App: 18 Hex-Zeichen).
+Nach erfolgreichen Datei-/Ordner-Aufträgen bitte index.onm (betroffener Ort) und status.onm neu schreiben.
+Ergebnis darf zusätzlich `"refresh": ["storage", …]` enthalten (Orte, deren Liste neu ist).
+
+---
+
+# Schnittstelle v3 (geplant, erst nach Dennis' „ausführen“) – alles optional
+
+## 10.1 status.onm
+* `locations[].color`: `"#RRGGBB"`, die Quellenfarbe. Jede Quelle bekommt eine eigene Farbe.
+* `folderStyles`: `[ { "location", "path", "color": "#RRGGBB", "icon": "folder|star|heart|photo|music|video|doc|work|home|lock|cloud|archive" } ]`
+* `ignored`: `{ "<locationId>": ["pfad"] }`. Diese Ordner sind dauerhaft ignoriert. Sie sind immer ausgeblendet, auch wenn „Versteckte zeigen“ an ist. Aufheben geht nur unter Einstellungen → „Ignorierte Ordner“.
+* `locks[]`: wie bisher. Es gilt jetzt für Ordner und ganze Laufwerke (path ""), mit 4–6 Ziffern.
+
+## 10.2 Neue Aufträge
+| type | args |
+|---|---|
+| `ordnerStil` | `{ location, path, color, icon }` (null = Standard) |
+| `ignorieren` | `{ location, path, on }` |
+
+## 10.3 „Alle Quellen“ und Quellenpunkte
+Die App fügt alle Orte zu einer Ansicht zusammen. Gleiche Einträge haben denselben relativen Pfad und dieselbe Größe; sie erscheinen nur einmal und tragen einen Punkt je Quelle. Gleichnamige Einträge, die nicht gleich sind, bekommen die Quelle hinter den Namen.
+Optional im Index: Flag 32 = „liegt auf mehreren Quellen“.

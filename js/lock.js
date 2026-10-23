@@ -171,27 +171,51 @@ export function askPin(title, hash, length = 4) {
   });
 }
 
-/** Eigene App-PIN festlegen (nur, wenn am PC keine PIN gesetzt ist). */
-export function setOwnPin() {
+/**
+ * Neue PIN wählen (4 bis 6 Ziffern, zweimal eingeben). Liefert { hash, length } oder null.
+ * Der Hash hat dasselbe Format wie am PC (PBKDF2-SHA256, 600 000 Runden).
+ */
+export function choosePin(title, hint = '') {
   return new Promise((resolve) => {
+    let result = null;
+    let length = 4;
     let first = null;
-    let done = false;
     const body = h('div.dialog-body.center');
-    const info = h('p', 'Neue PIN (4 Ziffern) eingeben');
-    const s = sheet(body, { title: 'App-PIN festlegen', onClose: () => resolve(done) });
-    const pad = pinPad({
-      length: 4,
-      onDone: async (v) => {
-        if (!first) { first = v; info.textContent = 'PIN wiederholen'; return 'again'; }
-        if (v !== first) { first = null; info.textContent = 'Die PINs waren verschieden. Neue PIN eingeben'; return false; }
-        lock.ownPin = await makeHash(v);
-        lock.ownPinLength = 4;
-        await saveLock();
-        done = true;
-        s.close();
-        return true;
-      },
-    });
-    body.append(info, pad);
+    const info = h('p');
+    const lens = h('div.seg');
+    const padBox = h('div');
+    const s = sheet(body, { title, onClose: () => { document.removeEventListener('keydown', onKey); resolve(result); } });
+    let pad = null;
+    const onKey = (e) => pad && pad.onKey && pad.onKey(e);
+    document.addEventListener('keydown', onKey);
+    const build = () => {
+      first = null;
+      info.textContent = `Neue PIN (${length} Ziffern) eingeben`;
+      lens.replaceChildren(...[4, 5, 6].map((n) => h('button' + (n === length ? '.on' : ''), { onclick: () => { length = n; build(); } }, n + ' Ziffern')));
+      pad = pinPad({
+        length,
+        onDone: async (v) => {
+          if (!first) { first = v; info.textContent = 'PIN wiederholen'; return 'again'; }
+          if (v !== first) { first = null; info.textContent = 'Die PINs waren verschieden. Neue PIN eingeben'; return false; }
+          info.textContent = 'Wird gespeichert …';
+          result = { hash: await makeHash(v), length };
+          s.close();
+          return true;
+        },
+      });
+      padBox.replaceChildren(pad);
+    };
+    body.append(hint ? h('p.muted.small', hint) : null, lens, info, padBox);
+    build();
   });
+}
+
+/** Eigene App-PIN festlegen (nur, wenn am PC keine PIN gesetzt ist). */
+export async function setOwnPin() {
+  const r = await choosePin('App-PIN festlegen');
+  if (!r) return false;
+  lock.ownPin = r.hash;
+  lock.ownPinLength = r.length;
+  await saveLock();
+  return true;
 }

@@ -2,7 +2,7 @@
 
 import { kv, cache } from './db.js';
 import { PCloud } from './pcloud.js';
-import { DemoBackend, demoStatus, demoIndex, DEMO_PAIRING } from './demo.js';
+import { DemoBackend, demoStatus, demoIndex, demoLog, demoListe, DEMO_PAIRING } from './demo.js';
 import { encryptOnm, decryptOnm, b64urlToBytes } from './crypto.js';
 import { uid } from './util.js';
 
@@ -82,6 +82,7 @@ export const state = {
   index: [],          // LocIndex[]
   handy: { v: 1, uploads: {}, favs: {}, lastFolder: null },
   jobs: [],           // eigene Aufträge mit Ergebnis
+  log: null,          // protokoll.onm vom PC
   lastSync: null,
   syncing: false,
   syncError: null,
@@ -122,11 +123,13 @@ export async function init() {
   if (!state.pairing) return false;
   makeBackend();
   if (isDemo()) {
-    state.status = demoStatus();
+    state.status = (await cache.get('demoStatus')) || demoStatus();
     setIndex(demoIndex());
+    state.log = demoLog();
   } else {
     state.status = (await cache.get('status')) || null;
     setIndex(await cache.get('index'));
+    state.log = (await cache.get('log')) || null;
   }
   state.lastSync = (await kv.get('lastSync')) || null;
   return true;
@@ -143,7 +146,7 @@ export function parsePairing(text) {
   if (!m) throw new Error('Das ist kein Kopplungs-Code von Orbit NAS.');
   let p;
   try { p = JSON.parse(new TextDecoder().decode(b64urlToBytes(m[1]))); } catch { throw new Error('Der Code ist unvollständig. Bitte noch einmal scannen.'); }
-  if (p.v !== 1) throw new Error('Dieser Code ist von einer neueren PC-Version. Bitte die App neu laden (Mehr → Nach Update suchen).');
+  if (p.v !== 1) throw new Error('Dieser Code ist von einer neueren PC-Version. Bitte die App neu laden (Einstellungen → Über Orbit NAS → Nach Update suchen).');
   if (!p.token || !p.key || !p.base) throw new Error('Der Code ist unvollständig. Bitte noch einmal scannen.');
   if (b64urlToBytes(p.key).length !== 32) throw new Error('Der Code ist beschädigt.');
   return { v: 1, pc: p.pc || 'PC', conn: p.conn || 'pcloud', host: p.host || 'api.pcloud.com', token: p.token, base: p.base, key: p.key, paired: new Date().toISOString() };
@@ -192,7 +195,7 @@ async function doSync({ force = false } = {}) {
   emit('sync');
   try {
     if (isDemo()) {
-      state.status = demoStatus();
+      state.status = (await cache.get('demoStatus')) || demoStatus();
       await mergeHandy(null);
       await pollResultsDemo();
     } else {
@@ -207,6 +210,10 @@ async function doSync({ force = false } = {}) {
       if (force || stamp('index.onm') !== seen.index || !state.index.length) {
         const idx = await readOnm('index.onm', 'index');
         if (idx) { setIndex(idx); await cache.set('index', idx); seen.index = stamp('index.onm'); }
+      }
+      if (force || stamp('protokoll.onm') !== seen.log || !state.log) {
+        const lg = await readOnm('protokoll.onm', 'protokoll').catch(() => null);
+        if (lg) { state.log = lg; await cache.set('log', lg); seen.log = stamp('protokoll.onm'); }
       }
       const remoteHandy = stamp('handy.onm') !== seen.handy || force || state.handyDirty ? await readOnm('handy.onm', 'handy') : null;
       const wrote = await mergeHandy(remoteHandy);
@@ -273,8 +280,9 @@ export async function sendJob(type, args, label) {
   if (!isDemo()) await writeOnm('auftraege/' + job.id + '.onm', 'auftrag', job);
   state.jobs.unshift({ id: job.id, type, args, label, created: job.created, state: 'gesendet', message: 'Wartet auf den PC …' });
   state.jobs = state.jobs.slice(0, 40);
-  await kv.set('jobs', state.jobs);
+  await saveJobs();
   emit('jobs');
+  if (isDemo()) setTimeout(() => sync().catch(() => {}), 1300);
   return job.id;
 }
 
@@ -290,24 +298,63 @@ async function pollResults() {
     const r = await readOnm('ergebnisse/' + f.name, 'ergebnis');
     if (!r) continue;
     Object.assign(j, { state: r.state, progress: r.progress, message: r.message || '', pickup: r.pickup || null, updated: r.updated, resultStamp: f.mtime });
+    if (r.entries) j.entries = r.entries;
+    if (r.refresh?.length) refreshAfterJob = true;
     changed = true;
   }
-  if (changed) { await kv.set('jobs', state.jobs); emit('jobs'); }
+  if (refreshAfterJob) {
+    refreshAfterJob = false;
+    // Der PC hat Listen neu geschrieben: beim nächsten Abgleich status/index sicher neu lesen.
+    const seen = (await kv.get('seenStamps')) || {};
+    delete seen.status; delete seen.index;
+    await kv.set('seenStamps', seen);
+    setTimeout(() => sync().catch(() => {}), 1500);
+  }
+  if (changed) { await saveJobs(); emit('jobs'); }
+}
+let refreshAfterJob = false;
+
+/** Aufträge speichern; Listen-Ergebnisse (entries) nur im Zwischenspeicher, damit die Liste klein bleibt. */
+async function saveJobs() {
+  await kv.set('jobs', state.jobs.map(({ entries, ...j }) => j));
+  for (const j of state.jobs) if (j.entries) await cache.set('liste:' + j.args.location + ':' + (j.args.path || ''), { at: j.updated || new Date().toISOString(), entries: j.entries });
+}
+
+/** Wartet, bis ein Auftrag fertig ist (oder ein Fehler kam). */
+export function awaitJob(id, timeoutMs = 10 * 60000) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const check = () => {
+      const j = state.jobs.find((x) => x.id === id);
+      if (!j || j.state === 'fertig' || j.state === 'fehler' || Date.now() - t0 > timeoutMs) { off(); resolve(j || null); }
+    };
+    const off = onChange((w) => { if (w === 'jobs') check(); });
+    check();
+  });
+}
+
+/** Ändert den gespeicherten Stand vom PC sofort (z. B. Ordnerfarbe), bis der PC ihn neu schreibt. */
+export async function patchStatus(fn) {
+  if (!state.status) return;
+  fn(state.status);
+  await cache.set(isDemo() ? 'demoStatus' : 'status', state.status);
+  emit('status');
 }
 
 async function pollResultsDemo() {
   let changed = false;
   for (const j of openJobs()) {
     const age = Date.now() - Date.parse(j.created);
-    if (age > 8000) { j.state = 'fertig'; j.message = 'Erledigt (Beispiel).'; changed = true; }
-    else if (age > 2000 && j.state !== 'laeuft') { j.state = 'laeuft'; j.progress = 0.5; j.message = 'Läuft am PC … (Beispiel)'; changed = true; }
+    if (j.type === 'liste' && age > 1200) { j.state = 'fertig'; j.entries = demoListe(j.args.location, j.args.path); j.message = ''; changed = true; }
+    else if (age > 6000) { j.state = 'fertig'; j.message = 'Erledigt (Beispiel).'; changed = true; }
+    else if (age > 1500 && j.state !== 'laeuft') { j.state = 'laeuft'; j.progress = 0.5; j.message = 'Läuft am PC … (Beispiel)'; changed = true; }
   }
-  if (changed) { await kv.set('jobs', state.jobs); emit('jobs'); }
+  if (changed) { await saveJobs(); emit('jobs'); }
 }
 
 export async function clearFinishedJobs() {
   state.jobs = openJobs();
-  await kv.set('jobs', state.jobs);
+  await saveJobs();
   emit('jobs');
 }
 
@@ -320,6 +367,19 @@ export function isProtectedPcloud(path) {
   const b = basePath().toLowerCase();
   const p = path.toLowerCase();
   return p === b || p.startsWith(b + '/');
+}
+
+const pathIn = (list, relPath) => {
+  const p = relPath.replace(/^\/+/, '').toLowerCase();
+  return (list || []).some((h) => { const x = h.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase(); return p === x || p.startsWith(x + '/'); });
+};
+/** Dauerhaft ignoriert: immer ausgeblendet, auch wenn „Versteckte zeigen“ an ist. */
+export const isIgnored = (locationId, relPath) => pathIn(state.status?.ignored?.[locationId], relPath);
+
+/** Farbe und Symbol eines Ordners (Ordner-Stil vom PC), oder null. */
+export function folderStyle(locationId, relPath) {
+  const p = relPath.replace(/^\/+|\/+$/g, '').toLowerCase();
+  return (state.status?.folderStyles || []).find((f) => f.location === locationId && (f.path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase() === p) || null;
 }
 
 export function isHidden(locationId, relPath) {

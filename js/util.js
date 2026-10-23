@@ -86,20 +86,40 @@ export function extOf(name) {
   return i > 0 ? name.slice(i + 1).toLowerCase() : '';
 }
 
+// Dateiarten, Farben und Typnamen genau wie am PC (FileKinds.cs).
 const KINDS = {
-  bild: ['jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'webp', 'bmp', 'tif', 'tiff', 'dng', 'raw', 'cr2', 'nef', 'arw', 'svg'],
-  video: ['mp4', 'mov', 'm4v', 'mkv', 'avi', 'wmv', 'webm', 'mts', 'm2ts', '3gp', 'mpg', 'mpeg'],
-  audio: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'wma'],
+  image: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'heic', 'heif', 'tif', 'tiff', 'raw', 'cr2', 'nef', 'arw', 'dng', 'svg', 'ico'],
+  video: ['mp4', 'm4v', 'mkv', 'avi', 'mov', 'wmv', 'webm', 'mpg', 'mpeg', 'ts', 'm2ts', 'mts', '3gp', 'flv', 'vob'],
+  audio: ['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg', 'opus', 'wma', 'aiff'],
   pdf: ['pdf'],
-  dokument: ['doc', 'docx', 'odt', 'rtf', 'txt', 'md', 'pages', 'xls', 'xlsx', 'ods', 'csv', 'numbers', 'ppt', 'pptx', 'key', 'odp'],
-  archiv: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso', 'dmg'],
+  document: ['doc', 'docx', 'odt', 'rtf', 'pages'],
+  sheet: ['xls', 'xlsx', 'ods', 'csv', 'numbers'],
+  slides: ['ppt', 'pptx', 'odp', 'key'],
+  archive: ['zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz', 'iso'],
+  code: ['cs', 'js', 'py', 'html', 'css', 'json', 'xml', 'ps1', 'bat', 'cmd', 'sh', 'yml', 'yaml'],
+  text: ['txt', 'md', 'log', 'ini', 'nfo'],
+  program: ['exe', 'msi', 'apk', 'dll'],
 };
 export function kindOf(name, isFolder) {
-  if (isFolder) return 'ordner';
+  if (isFolder) return 'folder';
   const e = extOf(name);
   for (const [k, list] of Object.entries(KINDS)) if (list.includes(e)) return k;
-  return 'datei';
+  return 'other';
 }
+export const KIND_COLOR = {
+  folder: '#F5B544', image: '#EC4899', video: '#A855F7', audio: '#F97316', pdf: '#EF4444', document: '#3B82F6', sheet: '#22C55E',
+  slides: '#F59E0B', archive: '#B08968', code: '#14B8A6', text: '#94A3B8', program: '#64748B', other: '#94A3B8',
+};
+export function typeName(name, kind) {
+  return {
+    folder: 'Ordner', image: 'Bild', video: 'Video', audio: 'Musik / Audio', pdf: 'PDF-Dokument', document: 'Textdokument', sheet: 'Tabelle',
+    slides: 'Präsentation', archive: 'Archiv', code: 'Code', text: 'Textdatei', program: 'Programm',
+  }[kind] || (extOf(name) ? extOf(name).toUpperCase() + '-Datei' : 'Datei');
+}
+export const kindIcon = {
+  folder: 'folder', image: 'image', video: 'video', audio: 'audio', pdf: 'pdf', document: 'doc', sheet: 'sheet', slides: 'slides',
+  archive: 'archive', code: 'code', text: 'doc', program: 'program', other: 'file',
+};
 
 // ---------------------------------------------------------------- Symbole (eigene SVGs, kein Fremdinhalt)
 
@@ -149,6 +169,28 @@ const P = {
   play: 'M8 5v14l11-7z',
   pause: 'M6 5h4v14H6zm8 0h4v14h-4z',
   warn: 'M12 2 1 21h22zm-1 7h2v6h-2zm0 8h2v2h-2z',
+  forward: 'M8.6 4.6 16 12l-7.4 7.4 1.4 1.4 8.8-8.8L10 3.2z',
+  up: 'M12 4l7 7-1.4 1.4L13 7.8V20h-2V7.8l-4.6 4.6L5 11z',
+  chevron: 'M9.4 6 8 7.4l4.6 4.6L8 16.6 9.4 18l6-6z',
+  chevronDown: 'M6 9.4 7.4 8l4.6 4.6L16.6 8 18 9.4l-6 6z',
+  gear: 'M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z',
+  log: 'M5 3h14a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm2 4v2h10V7zm0 4v2h10v-2zm0 4v2h6v-2z',
+  plus: 'M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z',
+  cut: 'M9.6 7.6A3.5 3.5 0 1 0 8 9.4l2.6 2.6L8 14.6a3.5 3.5 0 1 0 1.6 1.8L12 14l7 7h3L9.6 7.6zM6.5 8A1.5 1.5 0 1 1 6.5 5a1.5 1.5 0 0 1 0 3zm0 11a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM19 3l-6 6 2 2 7-8z',
+  paste: 'M9 2h6v2h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3zm1 2v1h4V4zM6 6v14h12V6h-2v1H8V6z',
+  sheet: 'M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm1 10v7h10v-7zm1.5 1.5h3v1.5h-3zm4.5 0h3v1.5h-3zm-4.5 3h3V18h-3zm4.5 0h3V18h-3z',
+  slides: 'M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm1 10v6h10v-6zm2 1.5h6v3H9z',
+  code: 'M8.6 7.4 4 12l4.6 4.6L7.2 18l-6-6 6-6zm6.8 0L16.8 6l6 6-6 6-1.4-1.4L20 12z',
+  program: 'M3 4h18a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 4v10h16V8zm2 2 3 2-3 2z',
+  heart: 'M12 21s-8-5.2-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 5.8-8 11-8 11z',
+  music: 'M9 18a3 3 0 1 1-2-2.8V5l12-2v12a3 3 0 1 1-2-2.8V6.4L9 7.7z',
+  work: 'M9 3h6a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2zm0 3h6V5H9z',
+  ignore: 'M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zM5.7 7.1A8 8 0 0 0 16.9 18.3zm1.4-1.4 11.2 11.2A8 8 0 0 0 7.1 5.7z',
+  palette: 'M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.4A4.6 4.6 0 0 0 22 10.8C22 5.9 17.5 2 12 2zM6.5 13a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
+  layers: 'M12 2 22 7l-10 5L2 7zm-7.8 8.4L12 14.3l7.8-3.9L22 11.5l-10 5-10-5zm0 4.5L12 18.8l7.8-3.9L22 16l-10 5-10-5z',
+  path: 'M4 4h6v2H6v12h12v-4h2v6H4zm10 0h6v6h-2V7.4l-6.3 6.3-1.4-1.4L16.6 6H14z',
+  cloudCheck: 'M7 19a5 5 0 0 1-.8-9.9A6.5 6.5 0 0 1 18.6 8 5.5 5.5 0 0 1 18 19zm3.2-3.6 5.3-5.3-1.4-1.4-3.9 3.9-1.9-1.9-1.4 1.4z',
+  clock: 'M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm-1 3h2v5.4l3.6 2.1-1 1.7L11 13.6z',
   link: 'M10.6 13.4a1 1 0 0 1 0-1.4l3-3a1 1 0 1 1 1.4 1.4l-3 3a1 1 0 0 1-1.4 0zM8.5 18a3.5 3.5 0 0 1-2.5-6l2-2 1.4 1.4-2 2a1.5 1.5 0 0 0 2.2 2.2l2-2 1.4 1.4-2 2a3.5 3.5 0 0 1-2.5 1zm6.1-4.6-1.4-1.4 2-2a1.5 1.5 0 0 0-2.2-2.2l-2 2L9.6 8.4l2-2a3.5 3.5 0 0 1 5 5z',
 };
 export function icon(name, cls = '') {
@@ -161,7 +203,6 @@ export function icon(name, cls = '') {
   svg.append(p);
   return svg;
 }
-export const kindIcon = { ordner: 'folder', bild: 'image', video: 'video', audio: 'audio', pdf: 'pdf', dokument: 'doc', archiv: 'archive', datei: 'file' };
 
 // ---------------------------------------------------------------- Meldungen und Dialoge
 
@@ -196,11 +237,13 @@ export function sheet(content, { title, wide = false, onClose } = {}) {
   return { el: box, close };
 }
 
-/** Auswahlliste (Aktionsblatt). items: [{ label, icon, danger, onclick, disabled, hint }] */
+/** Auswahlliste (Aktionsblatt) wie ein Kontextmenü. items: [{ label, icon, danger, onclick, disabled, hint }] oder '-' als Trennlinie. */
 export function actionSheet(title, items) {
   const list = h('div.actions');
   const s = sheet(list, { title });
-  for (const it of items.filter(Boolean)) {
+  const clean = items.filter(Boolean).filter((it, i, a) => it !== '-' || (i > 0 && a[i - 1] !== '-' && i < a.length - 1));
+  for (const it of clean) {
+    if (it === '-') { list.append(h('div.action-sep')); continue; }
     list.append(h('button.action' + (it.danger ? '.danger' : ''), {
       disabled: it.disabled,
       onclick: () => { s.close(); it.onclick && it.onclick(); },

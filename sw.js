@@ -1,5 +1,5 @@
 // Offline-Modus: Die App selbst liegt auf dem Gerät. Deine Daten (IndexedDB) fasst dieser Teil nie an.
-const BUILD = "fd7b28985fa3";
+const BUILD = "ecf7c6dafb15";
 const APP_CACHE = 'orbitnas-app-' + BUILD;
 const THUMBS = 'orbitnas-thumbs';
 const ASSETS = [
@@ -13,26 +13,26 @@ const ASSETS = [
   "./icons/icon-512.png",
   "./icons/icon-maskable-512.png",
   "./js/app.js",
+  "./js/backup.js",
   "./js/crypto.js",
   "./js/db.js",
   "./js/demo.js",
-  "./js/export.js",
   "./js/files.js",
+  "./js/locations.js",
   "./js/lock.js",
-  "./js/more.js",
+  "./js/log.js",
+  "./js/pairing.js",
   "./js/pcloud.js",
-  "./js/search.js",
-  "./js/start.js",
+  "./js/player.js",
+  "./js/settings.js",
   "./js/sync.js",
+  "./js/theme.js",
   "./js/ui.js",
   "./js/upload.js",
   "./js/util.js",
   "./js/version.js",
-  "./js/views.js",
   "./vendor/LIZENZEN.txt",
-  "./vendor/jsQR.js",
-  "./vendor/jspdf.plugin.autotable.min.js",
-  "./vendor/jspdf.umd.min.js"
+  "./vendor/jsQR.js"
 ];
 
 self.addEventListener('install', (e) => {

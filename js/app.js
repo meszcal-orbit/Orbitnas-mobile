@@ -1,72 +1,76 @@
-// Start der App: Grundgerüst, Navigation, Sperre, Abgleich im Hintergrund, Updates.
+// Start der App: Grundgerüst wie am PC (Leiste links am iPad, unten am iPhone), Sperre, Abgleich, Updates.
 
 import { h, icon, toast, clear } from './util.js';
 import { state, init, sync, onChange, openJobs } from './sync.js';
 import { persist } from './db.js';
-import { loadSettings, route, go, unlocked, isWide } from './ui.js';
+import { loadSettings, route, go, unlocked, isWide, isLandscapeWide, applyTheme } from './ui.js';
 import { loadLock, lock, lockEnabled, showLockScreen } from './lock.js';
-import { renderStart } from './start.js';
 import { renderFiles } from './files.js';
-import { renderSearch, renderUpload } from './views.js';
-import { renderWelcome, renderMore } from './more.js';
-import { isUploading, onQueue, stats } from './upload.js';
+import { renderBackup } from './backup.js';
+import { renderLog } from './log.js';
+import { renderSettings } from './settings.js';
+import { renderWelcome } from './pairing.js';
+import { isUploading } from './upload.js';
 import { APP_VERSION } from './version.js';
 
+// Dieselben Seiten wie am PC
 const NAV = [
-  ['start', 'Übersicht', 'home'],
   ['dateien', 'Dateien', 'folder'],
-  ['suche', 'Suche', 'search'],
-  ['hochladen', 'Hochladen', 'upload'],
-  ['mehr', 'Mehr', 'more'],
+  ['sicherung', 'Sicherung', 'shield'],
+  ['protokoll', 'Protokoll', 'log'],
+  ['einstellungen', 'Einstellungen', 'gear'],
 ];
 
 const root = document.getElementById('app');
 let view = null;
 let navEls = [];
-let syncBadge = null;
+let rail = null;
 
 function shell() {
   clear(root);
-  syncBadge = h('div.syncstate');
-  const side = h('nav.side', h('div.brand', h('img', { src: 'icons/icon-192.png', alt: '' }), h('span', 'Orbit NAS')),
-    NAV.map(([id, label, ic]) => h('a.nav', { href: '#/' + id, 'data-id': id }, icon(ic), h('span', label))), syncBadge);
-  const tabs = h('nav.tabs', NAV.map(([id, label, ic]) => h('a.tab', { href: '#/' + id, 'data-id': id }, icon(ic), h('span', label))));
+  const items = (cls) => NAV.map(([id, label, ic]) => h('a.' + cls, { href: '#/' + id, 'data-id': id }, h('span.ni', icon(ic)), h('span.nl', label)));
+  rail = h('nav.rail',
+    h('img.rail-logo', { src: 'icons/icon-192.png', alt: 'Orbit NAS' }),
+    ...items('ritem'),
+    h('div.rail-foot',
+      lockEnabled() ? h('button.ritem.lockbtn', { title: 'Sperren', onclick: lockNow }, h('span.ni', icon('lock'))) : null,
+      h('span.sdot', { title: '' }), h('span.ver', 'v' + APP_VERSION)));
+  const tabs = h('nav.tabs', items('tab'));
   view = h('main.view', { id: 'view' });
-  root.append(h('div.shell', side, view, tabs));
+  root.append(h('div.shell', rail, view, tabs));
   navEls = [...root.querySelectorAll('[data-id]')];
   paintSync();
 }
 
+function lockNow() { unlocked.clear(); showLockScreen(); }
+
 function paintSync() {
-  if (!syncBadge) return;
-  const up = stats();
-  clear(syncBadge).append(
-    state.syncing ? h('span', icon('sync', 'spin'), ' Gleiche ab …')
-      : !state.online ? h('span.warn', icon('cloud'), ' Offline')
-        : state.syncError ? h('span.warn', icon('warn'), ' ' + state.syncError.message)
-          : h('span', icon('check'), ' Abgeglichen'),
-    up.active ? h('span', icon('upload'), ` ${up.active} am Hochladen`) : null,
-    h('small', 'Version ' + APP_VERSION));
-  // kleiner Punkt am Tab „Hochladen“
-  root.querySelectorAll('[data-id=hochladen]').forEach((el) => el.classList.toggle('badge', up.active > 0));
+  const dot = root.querySelector('.sdot');
+  if (!dot) return;
+  const tone = state.syncing ? 'accent' : !state.online ? 'warn' : state.syncError ? 'danger' : 'ok';
+  dot.className = 'sdot ' + tone;
+  dot.title = state.syncing ? 'Gleicht ab …' : !state.online ? 'Offline' : state.syncError ? state.syncError.message : 'Abgeglichen ' + (state.lastSync ? new Date(state.lastSync).toLocaleTimeString('de-DE') : '');
+  const jobs = openJobs().length;
+  root.querySelectorAll('[data-id=sicherung]').forEach((el) => el.classList.toggle('badge', jobs > 0 || !!state.status?.operations?.some((o) => o.status === 'Läuft')));
 }
 
 let rendering = 0;
 async function render() {
+  applyTheme(state.status);
   if (!state.pairing) { renderWelcome(root); view = null; return; }
   if (!view || !document.body.contains(view)) shell();
   const { parts } = route();
-  const page = parts[0] || 'start';
+  const page = parts[0] || 'dateien';
   navEls.forEach((el) => el.classList.toggle('on', el.dataset.id === page));
+  document.documentElement.dataset.page = page;
   const my = ++rendering;
-  view.scrollTop = 0;
+  if (page !== 'dateien') view.scrollTop = 0;
   try {
-    if (page === 'start') await renderStart(view);
-    else if (page === 'dateien') await renderFiles(view, parts);
-    else if (page === 'suche') await renderSearch(view);
-    else if (page === 'hochladen') await renderUpload(view);
-    else if (page === 'mehr') await renderMore(view, parts);
-    else go('#/start');
+    if (page === 'dateien') await renderFiles(view, parts);
+    else if (page === 'sicherung') renderBackup(view);
+    else if (page === 'protokoll') renderLog(view);
+    else if (page === 'einstellungen') await renderSettings(view);
+    else go('#/dateien');
   } catch (e) {
     console.error(e);
     if (my === rendering) clear(view).append(h('div.empty', icon('warn', 'big'), h('p', e.message || String(e))));
@@ -82,20 +86,22 @@ async function backgroundSync(force = false) {
 }
 function schedule() {
   clearTimeout(timer);
-  const ms = openJobs().length ? 15000 : 60000;
+  const ms = openJobs().length ? 10000 : 60000;
   timer = setTimeout(async () => { await backgroundSync(); schedule(); }, ms);
 }
 
 let refreshPending = false;
 onChange((what) => {
   paintSync();
-  // Startseite bei neuen Daten aktualisieren (andere Seiten nicht, damit nichts unter dem Finger springt)
-  if (what === 'pairing') { view = null; render(); return; }
-  if ((what === 'jobs' || (what === 'sync' && !state.syncing)) && (route().parts[0] || 'start') === 'start' && !document.querySelector('.backdrop')) {
-    if (!refreshPending) { refreshPending = true; setTimeout(() => { refreshPending = false; if ((route().parts[0] || 'start') === 'start') render(); }, 300); }
+  if (what === 'pairing') { view = null; render(); if (state.pairing) { backgroundSync(true); schedule(); } return; }
+  if (what === 'jobs') schedule();
+  if (what === 'status' || what === 'sync') applyTheme(state.status);
+  // Seiten mit Stand vom PC neu zeichnen, wenn neue Daten da sind (Dateien nicht, damit nichts unter dem Finger springt)
+  const page = route().parts[0] || 'dateien';
+  if (['sicherung', 'protokoll'].includes(page) && (what === 'jobs' || what === 'status' || (what === 'sync' && !state.syncing)) && !document.querySelector('.backdrop')) {
+    if (!refreshPending) { refreshPending = true; setTimeout(() => { refreshPending = false; if (['sicherung', 'protokoll'].includes(route().parts[0])) render(); }, 300); }
   }
 });
-onQueue(paintSync);
 
 // ---------------------------------------------------------------- Sperre beim Zurückkehren
 
@@ -113,16 +119,18 @@ document.addEventListener('visibilitychange', async () => {
 window.addEventListener('online', () => { state.online = true; backgroundSync(); });
 window.addEventListener('offline', () => { state.online = false; paintSync(); });
 
-// ---------------------------------------------------------------- Updates (Service Worker)
+// ---------------------------------------------------------------- Updates (Service Worker) – Daten bleiben unberührt
 
 let reg = null;
 async function registerSw() {
   if (!('serviceWorker' in navigator)) return;
   try {
+    const hadController = !!navigator.serviceWorker.controller;
     reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading) return;
+      // Beim allerersten Start übernimmt der Service Worker nur – kein Neuladen, sonst geht z. B. das Koppeln-Fenster zu.
+      if (reloading || !hadController) return;
       reloading = true;
       if (isUploading()) { toast('Neue Version ist bereit – sie startet nach dem Hochladen.'); return; }
       location.reload();
@@ -141,23 +149,31 @@ function checkUpdate() { if (reg) reg.update().catch(() => {}); }
 // ---------------------------------------------------------------- Start
 
 window.addEventListener('hashchange', render);
-let lastWide = isWide();
-window.addEventListener('resize', () => {
-  // Beim Drehen des iPads zwischen Handy- und Tablet-Aufteilung umschalten
-  const w = isWide();
-  if (w !== lastWide) { lastWide = w; document.documentElement.classList.toggle('wide', w); }
-});
+let lastLayout = '';
+function layout() {
+  // Beim Drehen des iPads automatisch zwischen Handy-, Hochkant- und Quer-Aufteilung wechseln
+  const l = isLandscapeWide() ? 'wide land' : isWide() ? 'wide' : 'narrow';
+  if (l === lastLayout) return;
+  const before = lastLayout;
+  lastLayout = l;
+  document.documentElement.classList.toggle('wide', isWide());
+  document.documentElement.classList.toggle('land', isLandscapeWide());
+  if (before && state.pairing && (route().parts[0] || 'dateien') === 'dateien') render();
+}
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 300));
 
 (async function boot() {
-  document.documentElement.classList.toggle('wide', isWide());
+  layout();
   await loadSettings();
   await loadLock();
   const paired = await init();
+  applyTheme(state.status);
   persist();
   registerSw();
   document.getElementById('splash')?.remove();
   if (paired && lockEnabled()) await showLockScreen();
+  if (!location.hash || /^#\/(start|suche|hochladen|mehr)/.test(location.hash)) history.replaceState(null, '', '#/dateien');
   await render();
   if (paired) { backgroundSync(true); schedule(); }
-  onChange((w) => { if (w === 'pairing' && state.pairing) { backgroundSync(true); schedule(); } });
 })();

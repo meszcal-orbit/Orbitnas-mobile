@@ -8,6 +8,7 @@ import { askPin, choosePin, lockEnabled, showLockScreen } from './lock.js';
 import {
   ALL, locations, locById, locName, listFolder, fileState, stateText, managedFor, sourcesOf, hiddenItem, ignoredItem, direct, writable,
   newFolder, rename, remove, clipboard, setClipboard, paste, setHidden, setIgnored, setFolderStyle, isFavorite, setFavorite, download, viaPc,
+  readOnlyFor, setReadOnly, canShareLink, shareLink,
 } from './locations.js';
 import { backupNow, offload, restore, folderDialog, addConnectionInfo } from './backup.js';
 import { openPlayer } from './player.js';
@@ -121,6 +122,7 @@ export async function renderFiles(el, parts) {
   if (res.generated && Date.now() - Date.parse(res.generated) > 3600000) notices.append(h('div.notice.soft', icon('pc'), `Liste vom PC, Stand ${fmtDate(res.generated)}.`));
   if (res.note) notices.append(h('div.notice.soft', icon('info'), res.note));
   if (loc.mode === 'pcloud' && rel && !direct(locId, rel)) notices.append(h('div.notice.soft', icon('shield'), 'Hier liegen die Sicherungen des PCs. Ändern bitte über den Speicher – hier nur ansehen und herunterladen.'));
+  if (readOnlyFor(locId, rel)) notices.append(h('div.notice.soft', icon('lock'), 'Schreibgeschützt – hier kann nichts geändert, verschoben oder gelöscht werden (aufheben im Menü des Ordners).'));
   if (res.all) notices.append(h('div.notice.soft', icon('layers'), 'Alle Quellen zusammen. Die Punkte unter dem Symbol zeigen, wo etwas überall liegt.'));
   if (res.waiting) {
     notices.append(h('div.notice', h('div.spinner.small'), res.items.length ? `Aktuelle Liste kommt vom PC … (Stand ${fmtDate(res.cachedAt)})` : 'Der PC holt die Liste … (bis zu 2 Minuten, solange Orbit NAS am PC läuft)'));
@@ -326,7 +328,8 @@ function nameBits(it) {
   const mf = it.isFolder && it.location === 'storage' ? managedFor(it.rel) : null;
   const badge = mf && mf.path.toLowerCase() === it.rel.toLowerCase() ? BADGE[mf.mode] : '';
   return [h('span.nm', it.name), it.suffix ? h('span.suffix', '(' + it.suffix + ')') : null, badge ? h('span.badge', badge) : null,
-    isFavorite(it) ? icon('star', 'favmark') : null];
+    isFavorite(it) ? icon('star', 'favmark') : null,
+    !it.allView && readOnlyFor(it.location, it.rel) && (readOnlyFor(it.location, it.rel).path || '').toLowerCase() === it.rel.toLowerCase() ? h('span.robadge', { title: 'Schreibgeschützt' }, icon('lock')) : null];
 }
 
 function rowHandlers(it, el) {
@@ -412,7 +415,9 @@ export function itemMenu(it) {
   const k = kindOf(it.name, it.isFolder);
   const all = !!it.allView;
   const w = !all && writable(it.location, it.rel);
-  const parentW = !all && writable(it.location, it.rel.includes('/') ? it.rel.slice(0, it.rel.lastIndexOf('/')) : '');
+  const parentW = !all && !readOnlyFor(it.location, it.rel) && writable(it.location, it.rel.includes('/') ? it.rel.slice(0, it.rel.lastIndexOf('/')) : '');
+  const ro = !all && readOnlyFor(it.location, it.rel);
+  const roRoot = ro && (ro.path || '').toLowerCase() === it.rel.toLowerCase();
   const hidden = hiddenItem(it);
   const fav = isFavorite(it);
   const lk = it.isFolder && lockFor(it.location, it.rel);
@@ -426,6 +431,7 @@ export function itemMenu(it) {
     (cur.search || it.allView) && { label: 'Ordner öffnen, in dem es liegt', icon: 'folder', onclick: () => go(filesHash(it.allView ? ALL : it.location, parentRel)) },
     '-',
     !it.isFolder && { label: 'Herunterladen …', icon: 'download', hint: 'Teilen, „In Dateien sichern“ oder in einer anderen App öffnen', onclick: () => download(it) },
+    canShareLink(it) && { label: 'Teilen-Link erstellen …', icon: 'share', hint: 'Öffentlicher Download-Link, z. B. für WhatsApp oder Mail', onclick: () => shareLink(it) },
     '-',
     parentW && { label: 'Ausschneiden', icon: 'cut', onclick: () => { setClipboard([it], true); paint(); paintStatus(); renderFiles(view, ['dateien', cur.loc, cur.rel]); } },
     { label: 'Kopieren', icon: 'copy', onclick: () => { setClipboard([it], false); renderFiles(view, ['dateien', cur.loc, cur.rel]); } },
@@ -441,6 +447,9 @@ export function itemMenu(it) {
     !all && { label: fav ? 'Aus Favoriten entfernen' : 'Zu Favoriten hinzufügen', icon: 'star', onclick: async () => { await setFavorite(it, !fav); paint(); paintTree(); } },
     it.isFolder && !all && !isLockRoot && { label: 'Mit PIN schützen …', icon: 'lock', onclick: () => protect(it) },
     isLockRoot && { label: 'PIN-Schutz entfernen …', icon: 'lock', onclick: () => unprotect(it) },
+    !all && !ro && { label: 'Schreibgeschützt', icon: 'lock', hint: 'Niemand kann es dann umbenennen, verschieben oder löschen', onclick: async () => { await setReadOnly(it, true); paint(); } },
+    roRoot && { label: 'Schreibschutz aufheben', icon: 'edit', onclick: async () => { await setReadOnly(it, false); paint(); } },
+    ro && !roRoot && { label: 'Schreibgeschützt über „' + (ro.path || locName(it.location)).split('/').pop() + '“', icon: 'lock', disabled: true },
     it.isFolder && { label: 'Speicher-Analyse', icon: 'chart', onclick: () => analysis(it.allView ? ALL : it.location, it.rel) },
     { label: 'Eigenschaften', icon: 'info', onclick: () => properties(it) },
     '-',
@@ -642,7 +651,7 @@ async function deepSearch(q) {
       for (const x of all) {
         if (out.length >= limit) break;
         const r = x.path.replace(/^\/+/, '');
-        if (!match(x.name) || /(^|\/)\.(mobil|versionen|orbitnas)(\/|$)/i.test(r) || isIgnored(l.id, r)) continue;
+        if (!match(x.name) || /(^|\/)\.(mobil|versionen|orbitnas|verschluesselt)(\/|$)/i.test(r) || isIgnored(l.id, r)) continue;
         out.push({ ...x, location: l.id, rel: r, kind: 'pcloud' });
       }
     }

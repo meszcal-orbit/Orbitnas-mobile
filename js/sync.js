@@ -299,6 +299,7 @@ async function pollResults() {
     if (!r) continue;
     Object.assign(j, { state: r.state, progress: r.progress, message: r.message || '', pickup: r.pickup || null, updated: r.updated, resultStamp: f.mtime });
     if (r.entries) j.entries = r.entries;
+    if (r.link) j.link = r.link;
     if (r.refresh?.length) refreshAfterJob = true;
     changed = true;
   }
@@ -345,7 +346,8 @@ async function pollResultsDemo() {
   let changed = false;
   for (const j of openJobs()) {
     const age = Date.now() - Date.parse(j.created);
-    if (j.type === 'liste' && age > 1200) { j.state = 'fertig'; j.entries = demoListe(j.args.location, j.args.path); j.message = ''; changed = true; }
+    if (j.type === 'teilenLink' && age > 1200) { j.state = 'fertig'; j.link = 'https://u.pcloud.link/publink/show?code=BEISPIEL'; j.message = j.link; changed = true; }
+    else if (j.type === 'liste' && age > 1200) { j.state = 'fertig'; j.entries = demoListe(j.args.location, j.args.path); j.message = ''; changed = true; }
     else if (age > 6000) { j.state = 'fertig'; j.message = 'Erledigt (Beispiel).'; changed = true; }
     else if (age > 1500 && j.state !== 'laeuft') { j.state = 'laeuft'; j.progress = 0.5; j.message = 'Läuft am PC … (Beispiel)'; changed = true; }
   }

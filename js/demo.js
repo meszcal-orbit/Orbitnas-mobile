@@ -146,7 +146,7 @@ export class DemoBackend {
 export function demoStatus() {
   const ago = (ms) => new Date(now - ms).toISOString();
   return {
-    v: 1, schema: 2, generated: ago(6 * 60000), pc: 'PC (Beispiel)', appVersion: '0.6.0',
+    v: 1, schema: 3, generated: ago(6 * 60000), pc: 'PC (Beispiel)', appVersion: '0.6.0',
     design: { theme: 'Orbit', accent: '#6366F1', dark: true },
     backupDeviceText: 'Sichert automatisch: PC (Beispiel) · täglich um 02:00',
     running: null,
@@ -157,7 +157,7 @@ export function demoStatus() {
       storagePath: 'D:\\Daten', storageOk: true, storageMessage: 'Speicher erreichbar und beschreibbar.', rclone: { installed: '1.73.1', latest: '1.73.1' },
     },
     locations: [
-      { id: 'storage', name: 'Festplatte (D:)', kind: 'storage', type: '', used: 1.31e12, total: 2e12, free: 0.69e12, online: true, color: '#0EA5E9' },
+      { id: 'storage', name: 'Festplatte (D:)', kind: 'storage', type: '', used: 1.31e12, total: 2e12, free: 0.69e12, online: true, color: '#0EA5E9', drive: 'D' },
       { id: 'demo-fritz', name: 'FRITZ!NAS', kind: 'disk', type: 'LocalFolder', used: 610e9, total: 1e12, free: 390e9, online: true, color: '#E11D48' },
       { id: 'demo-pcloud', name: 'pCloud', kind: 'cloud', type: 'PCloud', used: 812e9, total: 2e12, free: 1.188e12, online: true, primary: true, color: '#7C3AED' },
       { id: 'demo-internxt', name: 'Internxt', kind: 'cloud', type: 'Internxt', used: 1.1e12, total: 5e12, free: 3.9e12, online: true, color: '#10B981' },
@@ -179,6 +179,7 @@ export function demoStatus() {
     hidden: {},
     ignored: { storage: ['Temp'] },
     folderStyles: [{ location: 'storage', path: 'Musik', color: '#A855F7', icon: 'music' }],
+    readOnly: [{ location: 'storage', path: 'Dokumente/Verträge', isFolder: true }],
     pin: null, pinIsPin: true, pinLength: 4,
     // Beispiel-Ordner-PIN für „Privat“: 1234
     locks: [{ location: 'storage', path: 'Privat', hash: 'pbkdf2-sha256$10000$MDEyMzQ1Njc4OWFiY2RlZg==$ixxYM1J8PQqA5j6d5jAkX8XLxDakMhAO4cNeFjzkuVE=', pinLength: 4 }],
@@ -225,6 +226,8 @@ export function demoIndex() {
   const docs = add(-1, 'Dokumente', 1 | 8);
   add(docs, 'Steuer 2025.pdf', 8, 1.2e6, 40);
   add(docs, 'Haushaltsbuch.xlsx', 8, 88000, 3);
+  const vert = add(docs, 'Verträge', 1 | 8);
+  add(vert, 'Mietvertrag.pdf', 8, 900000, 400);
   const filme = add(-1, 'Filme', 1 | 4);
   ['Der Hobbit.mkv', 'Urlaub Norwegen.mp4', 'Hochzeit.mov', 'Konzert.mp4'].forEach((n, i) => add(filme, n, 4, [12e9, 4.4e9, 21e9, 2.2e9][i], 90));
   const musik = add(-1, 'Musik', 1);

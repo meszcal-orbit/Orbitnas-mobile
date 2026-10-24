@@ -128,7 +128,7 @@ function ignoredCard(view) {
   const list = Object.entries(ig).flatMap(([loc, paths]) => (paths || []).map((p) => ({ location: loc, rel: p.replace(/\\/g, '/'), name: p.split(/[\\/]/).pop() })));
   return card('Ignorierte Ordner', 'Diese Ordner sind dauerhaft ausgeblendet – auch wenn „Versteckte zeigen“ an ist. Nur hier machst du sie wieder sichtbar.',
     list.length ? h('div.iglist', list.map((it) => h('div.igrow', icon('ignore'), h('span', h('b', it.name), h('small', locName(it.location) + ' › ' + it.rel.replace(/\//g, ' › '))),
-      h('button.btn.small', { onclick: async () => { await setIgnored(it, false); toast('Wird wieder angezeigt'); renderSettings(view); } }, 'Nicht mehr ignorieren'))))
+      h('button.btn.small', { onclick: async () => { await setIgnored(it, false); toast('Wird wieder angezeigt'); renderSettings(view); } }, 'Wieder anzeigen'))))
       : h('p.muted', 'Keine. Im Datei-Manager: Menü eines Ordners → „Dauerhaft ignorieren …“.'));
 }
 

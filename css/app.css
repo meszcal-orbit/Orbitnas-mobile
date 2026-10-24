@@ -233,6 +233,7 @@ html.land .tree { display: block; }
 .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suffix { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .badge { font-size: 11.5px; font-weight: 700; padding: 0 8px; border-radius: 9px; background: var(--accent-soft); white-space: nowrap; }
+.robadge { display: inline-flex; color: var(--muted); } .robadge .ic { width: 13px; height: 13px; }
 .favmark { width: 13px; height: 13px; color: #F5B544; }
 .subline { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sglyph { width: 26px; display: flex; justify-content: center; flex: none; }

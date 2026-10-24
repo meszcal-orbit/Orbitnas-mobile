@@ -44,6 +44,7 @@ export function locations() {
 function makeLoc(l, mode) {
   const grad = l.color ? [lighten(l.color), l.color] : KIND_GRAD[l.kind] || KIND_GRAD.extra;
   let typeText = l.kind === 'cloud' ? (l.type === 'PCloud' ? 'pCloud' : l.type || 'Cloud') + (l.primary ? ' · Haupt-Cloud' : '') : KIND_TYPE[l.kind] || '';
+  if (l.drive) typeText += ` · Laufwerk ${String(l.drive).replace(/:?$/, ':')}`;
   if (lockFor(l.id, '')?.hash && lockFor(l.id, '').path === '') typeText += ' · mit PIN';
   const spaceText = l.total ? `${fmtSize(l.free ?? l.total - l.used)} frei von ${fmtSize(l.total)}` : l.online === false ? 'Nicht erreichbar' : '';
   return { ...l, mode, grad, color: grad[1], typeText, spaceText, usedPct: l.total ? Math.min(100, (l.used / l.total) * 100) : null };
@@ -101,7 +102,7 @@ function fromRemote(locId, parent, e) {
   return { name, isFolder: !!(flags & 1), size, mtime: mtime * 1000, hidden: !!(flags & 2), offloaded: !!(flags & 4), backedUp: !!(flags & 8), location: locId, rel, path: rel, kind: 'remote' };
 }
 
-const SYSTEM = /^\.(mobil|versionen|orbitnas)$/i;
+export const SYSTEM = /^\.(mobil|versionen|orbitnas|verschluesselt)$/i;
 
 /**
  * Liest einen Ordner. Ergebnis: { items, live, offline, cachedAt, generated, waiting (Auftrag läuft), folderid }.
@@ -145,39 +146,46 @@ export async function listFolder(locId, rel, opts = {}) {
 }
 
 /** „Alle Quellen“: alle Orte übereinander gelegt. Gleiche Einträge (gleicher Pfad, gleiche Größe) erscheinen einmal mit Punkten. */
-async function listAll(rel, opts) {
+async function listAll(rel) {
+  // Wie am PC: alle Orte übereinander. Bei Clouds/Platten wird der Basisordner (OrbitNAS) in die oberste Ebene
+  // eingeblendet, damit Sicherungskopien neben dem Original liegen.
+  const base = (state.pairing?.base || 'OrbitNAS').replace(/^\/+|\/+$/g, '');
   const locs = locations().filter((l) => l.mode !== 'all' && !(lockFor(l.id, rel)?.hash));
-  const results = await Promise.all(locs.map(async (l) => {
+  const read = async (l, r) => {
     if (l.mode === 'remote') {
-      const c = await cache.get('liste:' + l.id + ':' + rel);
-      return { l, items: c ? c.entries.map((e) => fromRemote(l.id, rel, e)) : [] };
+      const c = await cache.get('liste:' + l.id + ':' + r);
+      return c ? c.entries.map((e) => fromRemote(l.id, r, e)) : [];
     }
-    try { return { l, items: (await listFolder(l.id, rel)).items }; } catch { return { l, items: [] }; }
+    try { return (await listFolder(l.id, r)).items; } catch { return []; }
+  };
+  const results = await Promise.all(locs.map(async (l) => {
+    const own = (await read(l, rel)).filter((it) => !(l.id !== 'storage' && !rel && it.isFolder && it.name.toLowerCase() === base.toLowerCase()));
+    const copies = l.id === 'storage' ? [] : (await read(l, base + (rel ? '/' + rel : ''))).map((it) => ({ ...it, backupCopy: true }));
+    return [...own, ...copies];
   }));
   const byName = new Map();
-  for (const { l, items } of results) {
-    for (const it of items) {
-      if (l.mode === 'pcloud' && !rel && it.isFolder && '/' + it.rel.toLowerCase() === basePath().toLowerCase()) continue;
-      if (isIgnored(it.location, it.rel)) continue;
-      const key = it.name.toLowerCase();
-      if (!byName.has(key)) byName.set(key, []);
-      byName.get(key).push(it);
-    }
+  for (const it of results.flat()) {
+    if (isIgnored(it.location, it.rel) || SYSTEM.test(it.name)) continue;
+    const key = it.name.toLowerCase();
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(it);
   }
   const out = [];
   for (const group of byName.values()) {
-    // gleiche Einträge zusammenfassen, verschiedene (z. B. andere Größe) einzeln mit Quelle hinter dem Namen
+    // Dateien: gleicher Name + gleiche Größe = dieselbe Datei. Ordner: nur mit ihrer Sicherungskopie zusammen.
     const clusters = [];
     for (const it of group) {
-      const c = clusters.find((x) => x[0].isFolder === it.isFolder && (it.isFolder || x[0].size === it.size));
+      let c = null;
+      if (!it.isFolder) c = clusters.find((x) => !x[0].isFolder && x[0].size === it.size);
+      else if (it.backupCopy) c = clusters.find((x) => x[0].isFolder && x.some((m) => m.location === 'storage' && !m.backupCopy));
       if (c) c.push(it); else clusters.push([it]);
     }
     for (const c of clusters) {
-      const main = c.find((x) => x.kind === 'pcloud') || c[0];
-      const sources = [...new Set(c.flatMap((x) => sourcesOf(x)))];
+      const main = c.find((x) => x.kind === 'pcloud' && !x.backupCopy) || c.find((x) => !x.backupCopy) || c[0];
       out.push({
-        ...main, members: c, sources, allView: true,
-        suffix: clusters.length > 1 ? c.map((x) => locName(x.location)).join(', ') : '',
+        ...main, members: c, sources: [...new Set(c.flatMap((x) => sourcesOf(x)))], allView: true,
+        rel: (rel ? rel + '/' : '') + main.name,
+        suffix: clusters.length > 1 ? [...new Set(c.map((x) => locName(x.location)))].join(', ') : '',
         size: c[0].isFolder ? Math.max(...c.map((x) => x.size || 0)) : main.size,
         mtime: Math.max(...c.map((x) => x.mtime || 0)),
       });
@@ -192,12 +200,22 @@ export const hiddenItem = (it) => (it.members || [it]).every((x) => x.hidden || 
 export const ignoredItem = (it) => (it.members || [it]).every((x) => isIgnored(x.location, x.rel));
 
 /** Kann das Handy diesen Ort/Pfad direkt ändern? (nur pCloud außerhalb des Sicherungsbereichs) */
-export const direct = (locId, rel) => locById(locId)?.mode === 'pcloud' && !isProtectedPcloud('/' + rel);
+/** Schreibgeschützt (samt Inhalt)? Liefert den Eintrag aus status.readOnly oder null. */
+export function readOnlyFor(locId, rel) {
+  const p = (rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
+  return (state.status?.readOnly || []).find((r) => {
+    if (r.location !== locId) return false;
+    const x = (r.path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
+    return x === '' || p === x || p.startsWith(x + '/');
+  }) || null;
+}
+
+export const direct = (locId, rel) => locById(locId)?.mode === 'pcloud' && !isProtectedPcloud('/' + rel) && !readOnlyFor(locId, rel);
 
 /** Darf hier überhaupt etwas geändert werden (direkt oder per Auftrag)? */
 export function writable(locId, rel) {
   const loc = locById(locId);
-  if (!loc || loc.mode === 'all') return false;
+  if (!loc || loc.mode === 'all' || readOnlyFor(locId, rel)) return false;
   if (loc.mode === 'pcloud') return !isProtectedPcloud('/' + rel);
   return true;
 }
@@ -332,7 +350,8 @@ export function pcloudCopyPath(it) {
   if (it.location !== 'storage') return null;
   const conn = pcloudLocationId();
   const f = managedFor(it.rel);
-  if (!f || !(f.targets || []).includes(conn) || f.mode === 'DiskOnly') return null;
+  // Verschlüsselte Sicherungen kann nur der PC lesen (Auftrag „bereitstellen“).
+  if (!f || f.encrypted || !(f.targets || []).includes(conn) || f.mode === 'DiskOnly') return null;
   if (!(it.backedUp || it.offloaded)) return null;
   return basePath() + '/' + it.rel;
 }
@@ -377,4 +396,27 @@ export async function download(it) {
     if (!res.ok) throw new Error('Herunterladen fehlgeschlagen');
     await shareOrDownload(await res.blob(), it.name);
   } catch (e) { toast(e.message, 'err'); }
+}
+
+export async function setReadOnly(it, on) {
+  await sendJob('schreibschutz', { location: it.location, path: it.rel, on }, `„${it.name}“ ${on ? 'schreibschützen' : 'Schreibschutz aufheben'}`);
+  await patchStatus((st) => {
+    st.readOnly = (st.readOnly || []).filter((r) => !(r.location === it.location && (r.path || '').toLowerCase() === it.rel.toLowerCase()));
+    if (on) st.readOnly.push({ location: it.location, path: it.rel, isFolder: it.isFolder });
+  });
+  toast(on ? 'Schreibgeschützt – der PC übernimmt es' : 'Schreibschutz aufgehoben');
+}
+
+/** Kann der PC für diesen Eintrag einen öffentlichen Link erstellen? (pCloud oder unverschlüsselte Kopie in pCloud) */
+export const canShareLink = (it) => (it.members || [it]).some((x) => x.kind === 'pcloud' || !!pcloudCopyPath(x));
+
+export async function shareLink(it) {
+  const m = it.members ? (it.members.find((x) => x.kind === 'pcloud') || it.members.find((x) => pcloudCopyPath(x)) || it.members[0]) : it;
+  toast('Der PC erstellt den Link … (bis zu 2 Minuten)');
+  const id = await sendJob('teilenLink', { location: m.location, path: m.rel }, `Teilen-Link für „${m.name}“`);
+  const j = await awaitJob(id);
+  const link = j?.link || (j?.state === 'fertig' && /^https?:\/\//.test(j.message || '') ? j.message : null);
+  if (!link) { toast(j?.message || 'Kein Link erhalten. Läuft Orbit NAS am PC?', 'err'); return; }
+  try { if (navigator.share) { await navigator.share({ title: m.name, url: link }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(link); toast('Link kopiert'); } catch { toast(link); }
 }

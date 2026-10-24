@@ -358,6 +358,14 @@ export function pcloudCopyPath(it) {
 
 /** Direkter Link zum Ansehen/Abspielen, oder null (dann muss der PC die Datei bereitstellen). */
 export async function linkFor(it) {
+  try { return await linkFor_(it); } catch (e) {
+    if (e.code !== 'LOGIN') throw e;
+    const { openLogin } = await import('./pairing.js');
+    if (await openLogin({ reason: e.message })) return linkFor_(it);
+    throw e;
+  }
+}
+async function linkFor_(it) {
   const m = it.members ? (it.members.find((x) => x.kind === 'pcloud') || it.members.find((x) => pcloudCopyPath(x)) || it.members[0]) : it;
   if (m.kind === 'pcloud') return state.backend.fileLink(m);
   const p = pcloudCopyPath(m);

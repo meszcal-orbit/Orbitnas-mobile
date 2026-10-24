@@ -31,6 +31,7 @@ export class ApiError extends Error {
 export class LoginError extends Error {
   constructor(message) { super(message || 'Bitte bei pCloud anmelden (Einstellungen → pCloud-Anmeldung).'); this.code = 'LOGIN'; this.login = true; }
 }
+const NEED_LOGIN = 'pCloud lässt die App Dateien nur mit deiner Anmeldung öffnen. Bitte einmal mit demselben Konto wie am PC anmelden.';
 const LOGIN_MESSAGES = {
   2000: 'E-Mail oder Passwort von pCloud stimmt nicht.',
   2297: 'Bei pCloud ist die Zwei-Faktor-Anmeldung an. Das kann die App noch nicht. Bitte Claude Bescheid geben, dann wird es nachgerüstet.',
@@ -110,6 +111,15 @@ export class PCloud {
   async _bytes(item) {
     let fileid = item.fileid;
     if (!fileid) fileid = (await this.api('stat', { path: item.path })).metadata.fileid;
+    // Ohne Anmeldung zuerst den normalen Weg versuchen. pCloud lehnt ihn für Web-Apps meist ab (7010), dann ist die Anmeldung nötig.
+    if (!this.login) {
+      let j;
+      try { j = await this.api('getfilelink', { fileid }); } catch (e) { if (e.code === 7010) throw new LoginError(NEED_LOGIN); throw e; }
+      let res;
+      try { res = await fetch('https://' + j.hosts[0] + j.path, { cache: 'no-store' }); } catch { throw new LoginError(NEED_LOGIN); }
+      if (!res.ok) throw new LoginError(NEED_LOGIN);
+      return new Uint8Array(await res.arrayBuffer());
+    }
     const url = this._signedUrl('getzip', { fileids: fileid, filename: 'datei.zip' }, await this._signed());
     let res;
     try { res = await fetch(url, { cache: 'no-store' }); } catch { throw new OfflineError(); }

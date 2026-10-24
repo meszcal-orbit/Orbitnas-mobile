@@ -49,9 +49,24 @@ export function openPairing() {
     let p;
     try { p = parsePairing(text); } catch (e) { status.textContent = e.message; status.className = 'err-text center'; return; }
     stop();
-    // Schritt 2: pCloud-Anmeldung (pCloud erlaubt Web-Apps das Lesen von Dateien nur damit)
+    status.className = 'muted center';
+    status.textContent = 'Verbinde mit pCloud …';
+    try {
+      await pair(p, null);
+      s.close();
+      toast('Gekoppelt mit ' + p.pc);
+      go('#/dateien');
+      return;
+    } catch (e) {
+      if (e.code !== 'LOGIN') {
+        status.className = 'err-text center';
+        status.textContent = e.code === 'KEY' ? e.message : 'Koppeln hat nicht geklappt: ' + e.message;
+        return;
+      }
+    }
+    // Schritt 2: pCloud-Anmeldung (pCloud erlaubt Web-Apps das Lesen von Dateien meist nur damit)
     clear(body).append(loginForm({
-      intro: `Code von „${p.pc}“ erkannt. Jetzt noch einmal bei pCloud anmelden, mit demselben Konto wie am PC.`,
+      intro: `Code von „${p.pc}“ erkannt. pCloud verlangt jetzt noch deine Anmeldung, mit demselben Konto wie am PC.`,
       button: 'Anmelden und koppeln',
       async submit(login, st) {
         st.className = 'muted center';

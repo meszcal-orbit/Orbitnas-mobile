@@ -10,7 +10,6 @@ import { renderBackup } from './backup.js';
 import { renderLog } from './log.js';
 import { renderSettings } from './settings.js';
 import { renderWelcome, openLogin } from './pairing.js';
-import { hasLogin } from './login.js';
 import { isUploading } from './upload.js';
 import { APP_VERSION } from './version.js';
 
@@ -182,7 +181,5 @@ window.addEventListener('orientationchange', () => setTimeout(layout, 300));
   if (paired && lockEnabled()) await showLockScreen();
   if (!location.hash || /^#\/(start|suche|hochladen|mehr)/.test(location.hash)) history.replaceState(null, '', '#/dateien');
   await render();
-  // Ab 2.2 braucht das Lesen von Dateien die pCloud-Anmeldung (pCloud-Vorgabe für Web-Apps)
-  if (paired && !state.pairing.demo && !(await hasLogin())) await openLogin({ reason: 'Neu in dieser Version: pCloud lässt die App Dateien nur mit deiner Anmeldung öffnen. Bitte einmal mit demselben Konto wie am PC anmelden.' });
   if (paired) { backgroundSync(true); schedule(); }
 })();

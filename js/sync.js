@@ -160,10 +160,12 @@ export async function pair(pairing, login) {
   // Zugang prüfen, bevor gespeichert wird: Token vom PC und Anmeldung müssen zum selben pCloud-Konto gehören.
   try {
     const info = await state.backend.userinfo();
-    await checkSameAccount(login, info.email);
+    if (login) await checkSameAccount(login, info.email);
+    state.backend.setLogin(login);
+    // Lesen testen, bevor gespeichert wird (ohne Anmeldung meldet pCloud hier ggf. „Anmeldung nötig“)
+    await readOnm('status.onm', 'status');
   } catch (e) { state.pairing = null; state.backend = null; throw e; }
-  state.backend.setLogin(login);
-  await saveLogin(login.user, login.pass);
+  if (login) await saveLogin(login.user, login.pass);
   await kv.set('pairing', pairing);
   await sync({ force: true });
   emit('pairing');

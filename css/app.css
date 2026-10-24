@@ -513,3 +513,5 @@ html.has-ops.wide .view { padding-bottom: calc(var(--safe-b) + 64px); }
 .link.forgot { margin-top: 14px; }
 .pl-stage img { -webkit-touch-callout: none; user-select: none; }
 .lockscreen ~ .backdrop { z-index: 45; }
+.moved { gap: 10px; padding: 24px; text-align: center; }
+.moved-steps { text-align: left; max-width: 360px; line-height: 1.6; }

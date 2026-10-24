@@ -1,6 +1,6 @@
 # Orbit NAS Mobil ↔ Orbit NAS (PC) – Schnittstelle v1
 
-Die Handy-App (PWA, https://meszcal-orbit.github.io/Orbitnas-mobile/) spricht **direkt mit der pCloud-API**
+Die Handy-App (PWA, https://orbitnas-mobil.github.io/) spricht **direkt mit der pCloud-API**
 (Token aus der rclone.conf des PCs). Alles, was nur der PC kann (FRITZ!NAS, Speicher, Internxt, rclone-Sicherung),
 läuft über **verschlüsselte Dateien in pCloud**. Es gibt keinen Server.
 

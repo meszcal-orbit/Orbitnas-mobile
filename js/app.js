@@ -171,8 +171,29 @@ function layout() {
 window.addEventListener('resize', layout);
 window.addEventListener('orientationchange', () => setTimeout(layout, 300));
 
+// Umzug: Die App wohnt jetzt unter einer eigenen Adresse, damit ihre Daten in Safari von anderen Seiten getrennt sind.
+const NEW_HOME = 'https://orbitnas-mobil.github.io/';
+function movedNotice() {
+  return new Promise((resolve) => {
+    const box = h('div.lockscreen.moved',
+      h('img.lock-logo', { src: 'icons/icon-192.png', alt: '' }),
+      h('h1', 'Orbit NAS ist umgezogen'),
+      h('p.muted', 'Damit die Daten der App nie mehr mit anderen Seiten vermischt werden, hat sie eine eigene Adresse:'),
+      h('p', h('b', 'orbitnas-mobil.github.io')),
+      h('ol.moved-steps',
+        h('li', 'Unten auf „Zur neuen Adresse“ tippen.'),
+        h('li', 'Dort über das Teilen-Symbol „Zum Home-Bildschirm“ wählen.'),
+        h('li', 'Das alte Orbit-NAS-Symbol vom Home-Bildschirm löschen.'),
+        h('li', 'In der neuen App einmal bei pCloud anmelden.')),
+      h('a.btn.primary.big', { href: NEW_HOME, target: '_blank', rel: 'noopener' }, 'Zur neuen Adresse'),
+      h('button.link', { onclick: () => { box.remove(); resolve(); } }, 'Vorerst hier weiter'));
+    document.body.append(box);
+  });
+}
+
 (async function boot() {
   layout();
+  if (location.hostname === 'meszcal-orbit.github.io') { document.getElementById('splash')?.remove(); await movedNotice(); }
   await loadSettings();
   await loadLock();
   const paired = await init();

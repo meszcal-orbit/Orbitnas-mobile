@@ -1,10 +1,10 @@
 {
   "name": "Orbit NAS",
   "short_name": "Orbit NAS",
-  "description": "Deine Dateien aus pCloud, vom PC und von der FRITZ!NAS",
+  "description": "Deine Dateien aus pCloud, OneDrive, Google Drive, Dropbox und von der FRITZ!NAS",
   "lang": "de",
   "id": "./",
-  "start_url": "./#/dateien",
+  "start_url": "./#/orte",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",

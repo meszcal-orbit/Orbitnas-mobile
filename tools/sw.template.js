@@ -29,11 +29,13 @@ self.addEventListener('fetch', (e) => {
   // Vorschaubilder aus pCloud: einmal geladen, auch offline sichtbar
   if (url.pathname.endsWith('/getthumb') && url.hostname.endsWith('pcloud.com')) {
     e.respondWith((async () => {
+      // Schlüssel ohne Anmelde-Kennung (auth), damit ein Bild nach neuer Anmeldung nicht neu geladen werden muss
+      const key = new URL(url); key.searchParams.delete('auth');
       const cache = await caches.open(THUMBS);
-      const hit = await cache.match(e.request);
+      const hit = await cache.match(key.href);
       if (hit) return hit;
       const res = await fetch(e.request);
-      if (res.ok) { cache.put(e.request, res.clone()); trimThumbs(cache); }
+      if (res.ok) { cache.put(key.href, res.clone()); trimThumbs(cache); }
       return res;
     })());
     return;

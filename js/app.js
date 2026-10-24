@@ -1,131 +1,133 @@
-// Start der App: Grundgerüst wie am PC (Leiste links am iPad, unten am iPhone), Sperre, Abgleich, Updates.
+// Start der App: eigenständig, greift selbst auf die Clouds zu. Aufbau wie die App „Dateien“:
+// Tab-Leiste unten am iPhone, Seitenleiste am iPad.
 
 import { h, icon, toast, clear } from './util.js';
-import { state, init, sync, onChange, openJobs } from './sync.js';
 import { persist } from './db.js';
-import { loadSettings, route, go, unlocked, isWide, isLandscapeWide, applyTheme } from './ui.js';
-import { loadLock, lock, lockEnabled, showLockScreen, lockImmediately } from './lock.js';
-import { renderFiles } from './files.js';
-import { renderBackup } from './backup.js';
-import { renderLog } from './log.js';
+import { loadSettings, route, go, unlocked, isWide, applyTheme, dirHash } from './ui.js';
+import { loadLock, lockEnabled, showLockScreen, lockImmediately } from './lock.js';
+import { loadConnections, connections, onConnections, source, addConnection } from './sources/registry.js';
+import { initStore, syncStore, onStore, autoLockMinutes } from './store.js';
+import { handleRedirect } from './sources/oauth.js';
+import { renderBrowse, renderFolder, renderRecent, renderFavorites, renderSearchAll } from './files.js';
 import { renderSettings } from './settings.js';
-import { renderWelcome, openLogin } from './pairing.js';
+import { renderFritz } from './fritz.js';
+import { openAddCloud, finishOAuth } from './addcloud.js';
+import { favorites, srcColor } from './fileops.js';
 import { isUploading } from './upload.js';
-import { APP_VERSION } from './version.js';
 import { mountOpsBar } from './opsbar.js';
+import { APP_VERSION } from './version.js';
 
-// Dieselben Seiten wie am PC
-const NAV = [
-  ['dateien', 'Dateien', 'folder'],
-  ['sicherung', 'Sicherung', 'shield'],
-  ['protokoll', 'Protokoll', 'log'],
+const TABS = [
+  ['zuletzt', 'Zuletzt', 'clock'],
+  ['orte', 'Durchsuchen', 'folder'],
+  ['favoriten', 'Favoriten', 'star'],
   ['einstellungen', 'Einstellungen', 'gear'],
 ];
 
 const root = document.getElementById('app');
 let view = null;
-let navEls = [];
-let rail = null;
+let side = null;
 
 function shell() {
   clear(root);
-  const items = (cls) => NAV.map(([id, label, ic]) => h('a.' + cls, { href: '#/' + id, 'data-id': id }, h('span.ni', icon(ic)), h('span.nl', label)));
-  rail = h('nav.rail',
-    h('img.rail-logo', { src: 'icons/icon-192.png', alt: 'Orbit NAS' }),
-    ...items('ritem'),
-    h('div.rail-foot',
-      lockEnabled() ? h('button.ritem.lockbtn', { title: 'Sperren', onclick: lockNow }, h('span.ni', icon('lock'))) : null,
-      h('span.sdot', { title: '' }), h('span.ver', 'v' + APP_VERSION)));
-  const tabs = h('nav.tabs', items('tab'));
+  side = h('nav.sidebar');
   view = h('main.view', { id: 'view' });
-  root.append(h('div.shell', rail, view, tabs));
+  const tabs = h('nav.tabs', TABS.map(([id, label, ic]) => h('a.tab', { href: '#/' + id, 'data-tab': id }, h('span.ni', icon(ic)), h('span.nl', label))));
+  root.append(h('div.shell', side, view, tabs));
   mountOpsBar(root);
-  navEls = [...root.querySelectorAll('[data-id]')];
-  paintSync();
+  paintSide();
+}
+
+/** Seitenleiste am iPad wie in „Dateien“: Zuletzt, Orte, Favoriten, Einstellungen. */
+function paintSide() {
+  if (!side) return;
+  const { parts } = route();
+  const here = parts[0] === 'd' ? 'd:' + parts[1] : parts[0];
+  const item = (id, label, ic, href, color) => h('a.sitem' + (here === id ? '.on' : ''), { href },
+    color ? h('span.srcicon.small', { style: { background: color } }, icon(ic)) : icon(ic), h('span', label));
+  clear(side).append(
+    h('div.side-head', h('img', { src: 'icons/icon-192.png', alt: '' }), h('b', 'Orbit NAS'), lockEnabled() ? h('button.nav-btn', { 'aria-label': 'Sperren', onclick: lockNow }, icon('lock')) : null),
+    item('zuletzt', 'Zuletzt', 'clock', '#/zuletzt'),
+    h('div.side-title', 'Orte'),
+    ...connections().map((c) => item('d:' + c.id, c.name, c.type === 'demo' ? 'layers' : 'cloud', dirHash(c.id), srcColor(c.id))),
+    item('fritz', 'FRITZ!NAS', 'disk', '#/fritz', '#E2001A'),
+    h('button.sitem.add', { onclick: () => openAddCloud() }, icon('plus'), h('span', 'Cloud hinzufügen')),
+    favorites().length ? h('div.side-title', 'Favoriten') : null,
+    ...favorites().slice(0, 12).map((f) => item(null, f.name, f.isFolder ? 'folder' : 'file', f.isFolder ? dirHash(f.conn, f.path) : dirHash(f.conn, f.path.slice(0, f.path.lastIndexOf('/')) || '/'))),
+    h('div.side-title', ''),
+    item('einstellungen', 'Einstellungen', 'gear', '#/einstellungen'),
+    h('div.side-foot', 'Version ' + APP_VERSION));
 }
 
 async function lockNow() { unlocked.clear(); await lockImmediately(); showLockScreen({ force: true }); }
 
-function paintSync() {
-  const dot = root.querySelector('.sdot');
-  if (!dot) return;
-  const tone = state.syncing ? 'accent' : !state.online ? 'warn' : state.syncError ? 'danger' : 'ok';
-  dot.className = 'sdot ' + tone;
-  dot.title = state.syncing ? 'Gleicht ab …' : !state.online ? 'Offline' : state.syncError ? state.syncError.message : 'Abgeglichen ' + (state.lastSync ? new Date(state.lastSync).toLocaleTimeString('de-DE') : '');
-  const jobs = openJobs().length;
-  root.querySelectorAll('[data-id=sicherung]').forEach((el) => el.classList.toggle('badge', jobs > 0 || !!state.status?.operations?.some((o) => o.status === 'Läuft')));
+// ---------------------------------------------------------------- Willkommen (noch keine Cloud)
+
+function welcome() {
+  clear(root).append(h('div.welcome',
+    h('img.wl-logo', { src: 'icons/icon-192.png', alt: '' }),
+    h('h1', 'Orbit NAS'),
+    h('p.muted', 'Deine Dateien aus pCloud, OneDrive, Google Drive, Dropbox und von der FRITZ!NAS – direkt auf dem iPhone und iPad.'),
+    h('button.btn.primary.big', { onclick: () => openAddCloud() }, icon('plus'), ' Cloud hinzufügen'),
+    h('button.btn.big', { onclick: async () => { const c = await addConnection('demo', {}, {}); go(dirHash(c.id)); } }, 'Erst mal ausprobieren (Beispiel)'),
+    h('p.muted.small', 'Die Anmeldungen bleiben nur auf diesem Gerät. Einstellungen wie Farben, Favoriten und PINs teilt die App über eine versteckte Datei in deiner Cloud mit Orbit NAS am PC.')));
+  view = null;
 }
+
+// ---------------------------------------------------------------- Seiten
 
 let rendering = 0;
 async function render() {
-  applyTheme(state.status);
-  if (!state.pairing) { renderWelcome(root); view = null; return; }
+  applyTheme();
+  if (!connections().length) { if (route().parts[0] === 'fritz') { if (!view) shell(); } else { welcome(); return; } }
   if (!view || !document.body.contains(view)) shell();
-  const { parts } = route();
-  const page = parts[0] || 'dateien';
-  navEls.forEach((el) => el.classList.toggle('on', el.dataset.id === page));
+  const { parts, query } = route();
+  const page = parts[0] || 'orte';
+  const tab = page === 'd' || page === 'suche' || page === 'fritz' ? 'orte' : page;
+  root.querySelectorAll('[data-tab]').forEach((el) => el.classList.toggle('on', el.dataset.tab === tab));
   document.documentElement.dataset.page = page;
+  paintSide();
   const my = ++rendering;
-  if (page !== 'dateien') view.scrollTop = 0;
   try {
-    if (page === 'dateien') await renderFiles(view, parts);
-    else if (page === 'sicherung') renderBackup(view);
-    else if (page === 'protokoll') renderLog(view);
-    else if (page === 'einstellungen') await renderSettings(view);
-    else go('#/dateien');
+    if (page === 'd') await renderFolder(view, parts[1], parts[2] ? '/' + parts[2] : '/');
+    else if (page === 'orte') { view.scrollTop = 0; await renderBrowse(view); }
+    else if (page === 'zuletzt') { view.scrollTop = 0; await renderRecent(view); }
+    else if (page === 'favoriten') { view.scrollTop = 0; await renderFavorites(view); }
+    else if (page === 'suche') await renderSearchAll(view, query.get('q') || '');
+    else if (page === 'fritz') { view.scrollTop = 0; await renderFritz(view); }
+    else if (page === 'einstellungen') { view.scrollTop = 0; await renderSettings(view, parts); }
+    else go('#/orte', { replace: true });
   } catch (e) {
     console.error(e);
-    if (my === rendering) clear(view).append(h('div.empty', icon('warn', 'big'), h('p', e.message || String(e))));
+    if (my === rendering) clear(view).append(h('div.empty', icon('warn', 'big'), h('p', e.message || String(e)), e.detail ? h('p.muted.small.detail', e.detail) : null));
   }
 }
 
-// ---------------------------------------------------------------- Abgleich im Hintergrund
-
-let timer = null;
-let loginAsked = false;
-async function backgroundSync(force = false) {
-  if (!state.pairing || document.visibilityState !== 'visible') return;
-  try { await sync({ force }); } catch (e) {
-    if (e && e.code === 'LOGIN' && !loginAsked && !document.querySelector('.backdrop')) {
-      loginAsked = true;
-      if (await openLogin({ reason: e.message })) backgroundSync(true);
-    }
-  }
-}
-function schedule() {
-  clearTimeout(timer);
-  const ms = openJobs().length ? 10000 : 60000;
-  timer = setTimeout(async () => { await backgroundSync(); schedule(); }, ms);
-}
-
-let refreshPending = false;
-onChange((what) => {
-  paintSync();
-  if (what === 'pairing') { view = null; render(); if (state.pairing) { backgroundSync(true); schedule(); } return; }
-  if (what === 'jobs') schedule();
-  if (what === 'status' || what === 'sync') applyTheme(state.status);
-  // Seiten mit Stand vom PC neu zeichnen, wenn neue Daten da sind (Dateien nicht, damit nichts unter dem Finger springt)
-  const page = route().parts[0] || 'dateien';
-  if (['sicherung', 'protokoll'].includes(page) && (what === 'jobs' || what === 'status' || (what === 'sync' && !state.syncing)) && !document.querySelector('.backdrop')) {
-    if (!refreshPending) { refreshPending = true; setTimeout(() => { refreshPending = false; if (['sicherung', 'protokoll'].includes(route().parts[0])) render(); }, 300); }
-  }
+let knownConns = 0;
+onConnections(() => {
+  if (!connections().length) view = null;
+  // Neue Cloud: gleich die Einstellungen vom PC holen (wer sich gerade angemeldet hat, muss die PIN nicht sofort eingeben)
+  if (connections().length > knownConns) syncStore();
+  knownConns = connections().length;
+  render();
 });
+let storeTimer = null;
+onStore(() => { applyTheme(); clearTimeout(storeTimer); storeTimer = setTimeout(paintSide, 200); });
 
 // ---------------------------------------------------------------- Sperre beim Zurückkehren
 
 let hiddenAt = null;
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
-  if (hiddenAt && lockEnabled() && Date.now() - hiddenAt >= (lock.autoLockMin ?? 2) * 60000) {
+  const min = autoLockMinutes();
+  if (hiddenAt && lockEnabled() && min > 0 && Date.now() - hiddenAt >= min * 60000) {
     unlocked.clear();
-    await showLockScreen();
+    await lockImmediately();
+    await showLockScreen({ force: true });
   }
   hiddenAt = null;
-  backgroundSync();
   checkUpdate();
 });
-window.addEventListener('online', () => { state.online = true; backgroundSync(); });
-window.addEventListener('offline', () => { state.online = false; paintSync(); });
 
 // ---------------------------------------------------------------- Updates (Service Worker) – Daten bleiben unberührt
 
@@ -137,17 +139,14 @@ async function registerSw() {
     reg = await navigator.serviceWorker.register('sw.js', { scope: './' });
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      // Beim allerersten Start übernimmt der Service Worker nur – kein Neuladen, sonst geht z. B. das Koppeln-Fenster zu.
       if (reloading || !hadController) return;
       reloading = true;
-      if (isUploading()) { toast('Neue Version ist bereit – sie startet nach dem Hochladen.'); return; }
+      if (isUploading() || document.querySelector('.backdrop')) { toast('Neue Version ist bereit – sie startet beim nächsten Öffnen.'); return; }
       location.reload();
     });
     reg.addEventListener('updatefound', () => {
       const nw = reg.installing;
-      nw && nw.addEventListener('statechange', () => {
-        if (nw.state === 'installed' && navigator.serviceWorker.controller && !isUploading()) nw.postMessage('skipWaiting');
-      });
+      nw && nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller && !isUploading()) nw.postMessage('skipWaiting'); });
     });
     if (reg.waiting && !isUploading()) reg.waiting.postMessage('skipWaiting');
   } catch (e) { console.warn('Offline-Modus nicht verfügbar', e); }
@@ -157,22 +156,16 @@ function checkUpdate() { if (reg) reg.update().catch(() => {}); }
 // ---------------------------------------------------------------- Start
 
 window.addEventListener('hashchange', render);
-let lastLayout = '';
+let lastWide = null;
 function layout() {
-  // Beim Drehen des iPads automatisch zwischen Handy-, Hochkant- und Quer-Aufteilung wechseln
-  const l = isLandscapeWide() ? 'wide land' : isWide() ? 'wide' : 'narrow';
-  if (l === lastLayout) return;
-  const before = lastLayout;
-  lastLayout = l;
-  document.documentElement.classList.toggle('wide', isWide());
-  document.documentElement.classList.toggle('land', isLandscapeWide());
-  if (before && state.pairing && (route().parts[0] || 'dateien') === 'dateien') render();
+  const w = isWide();
+  if (w === lastWide) return;
+  lastWide = w;
+  document.documentElement.classList.toggle('wide', w);
 }
 window.addEventListener('resize', layout);
-window.addEventListener('orientationchange', () => setTimeout(layout, 300));
 
-// Umzug: Die App wohnt jetzt unter einer eigenen Adresse, damit ihre Daten in Safari von anderen Seiten getrennt sind.
-const NEW_HOME = 'https://orbitnas-mobil.github.io/';
+// Umzug: Die App wohnt unter einer eigenen Adresse, damit ihre Daten in Safari von anderen Seiten getrennt sind.
 function movedNotice() {
   return new Promise((resolve) => {
     const box = h('div.lockscreen.moved',
@@ -185,7 +178,7 @@ function movedNotice() {
         h('li', 'Dort über das Teilen-Symbol „Zum Home-Bildschirm“ wählen.'),
         h('li', 'Das alte Orbit-NAS-Symbol vom Home-Bildschirm löschen.'),
         h('li', 'In der neuen App einmal bei pCloud anmelden.')),
-      h('a.btn.primary.big', { href: NEW_HOME, target: '_blank', rel: 'noopener' }, 'Zur neuen Adresse'),
+      h('a.btn.primary.big', { href: 'https://orbitnas-mobil.github.io/', target: '_blank', rel: 'noopener' }, 'Zur neuen Adresse'),
       h('button.link', { onclick: () => { box.remove(); resolve(); } }, 'Vorerst hier weiter'));
     document.body.append(box);
   });
@@ -196,13 +189,24 @@ function movedNotice() {
   if (location.hostname === 'meszcal-orbit.github.io') { document.getElementById('splash')?.remove(); await movedNotice(); }
   await loadSettings();
   await loadLock();
-  const paired = await init();
-  applyTheme(state.status);
+  await initStore();
+  await loadConnections();
+  knownConns = connections().length;
+  applyTheme();
   persist();
   registerSw();
+  let oauth = null;
+  try { oauth = await handleRedirect(); } catch (e) { oauth = { error: e.message + (e.detail ? ` (${e.detail})` : '') }; }
   document.getElementById('splash')?.remove();
-  if (paired && lockEnabled()) await showLockScreen();
-  if (!location.hash || /^#\/(start|suche|hochladen|mehr)/.test(location.hash)) history.replaceState(null, '', '#/dateien');
+  if (connections().length && lockEnabled()) await showLockScreen();
+  if (!location.hash || !/^#\/(orte|d|zuletzt|favoriten|einstellungen|suche|fritz)/.test(location.hash)) history.replaceState(null, '', '#/orte');
   await render();
-  if (paired) { backgroundSync(true); schedule(); }
+  if (oauth) await finishOAuth(oauth);
+  if (connections().length) {
+    // Einstellungen vom PC holen; erst danach weiß die App z. B. Farben und PINs
+    const hadPin = lockEnabled();
+    await syncStore();
+    if (!hadPin && lockEnabled()) await showLockScreen();
+    for (const c of connections()) source(c.id).catch(() => {});
+  }
 })();

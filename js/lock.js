@@ -1,12 +1,13 @@
-// App-Sperre: PIN (die vom PC oder eine eigene) und Face ID / Touch ID über die Passkey-Funktion von iOS.
+// App-Sperre: Programm-PIN (gemeinsam mit dem PC über die Einstellungsdatei) und Face ID / Touch ID über die Passkey-Funktion von iOS.
+// Face ID und die 24 Stunden gelten nur auf diesem Gerät.
 
 import { kv } from './db.js';
 import { verifyHash, makeHash, bytesToB64url, b64urlToBytes } from './crypto.js';
-import { state } from './sync.js';
 import { h, icon, toast, sheet } from './util.js';
 import { securityQuestion, askSecurity } from './secq.js';
+import { appPin, setSingle } from './store.js';
 
-export const lock = { faceId: null, ownPin: null, ownPinLength: 4, autoLockMin: 2, stay24h: true, unlockedUntil: 0 };
+export const lock = { faceId: null, stay24h: true, unlockedUntil: 0 };
 const DAY = 24 * 3600 * 1000;
 
 /** Nach dem Entsperren 24 Stunden auf diesem Gerät keine Programm-PIN (gilt nicht für Ordner-PINs). */
@@ -16,13 +17,10 @@ export async function lockImmediately() { lock.unlockedUntil = 0; await saveLock
 export async function loadLock() { Object.assign(lock, (await kv.get('lock')) || {}); }
 export const saveLock = () => kv.set('lock', { ...lock });
 
-/** Welche PIN gilt: die vom PC (falls gesetzt), sonst die eigene der App. */
+/** Die Programm-PIN (am PC und auf dem Handy dieselbe). length 0 = Passwort. */
 export function activePin() {
-  if (state.status?.pin) {
-    return { hash: state.status.pin, isPin: state.status.pinIsPin !== false, length: state.status.pinLength || 4, fromPc: true };
-  }
-  if (lock.ownPin) return { hash: lock.ownPin, isPin: true, length: lock.ownPinLength || 4, fromPc: false };
-  return null;
+  const p = appPin();
+  return p ? { hash: p.hash, isPin: Number(p.length) > 0, length: Number(p.length) || 4 } : null;
 }
 export const lockEnabled = () => !!activePin() || !!lock.faceId;
 
@@ -37,7 +35,7 @@ export async function enrollFaceId() {
   const cred = await navigator.credentials.create({
     publicKey: {
       rp: { name: 'Orbit NAS' },
-      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'Orbit NAS – ' + (state.pairing?.pc || 'App'), displayName: 'Orbit NAS' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'Orbit NAS', displayName: 'Orbit NAS' },
       challenge: crypto.getRandomValues(new Uint8Array(32)),
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
       authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
@@ -157,14 +155,12 @@ export function showLockScreen({ force = false } = {}) {
     }
     if (pin) screen.append(h('button.link.forgot', { onclick: async () => {
       if (!securityQuestion()) {
-        toast(pin.fromPc ? 'Ohne Sicherheitsfrage: am PC unter Einstellungen → Sicherheit eine neue PIN festlegen.' : 'Ohne Sicherheitsfrage geht das nicht. Lege sie später unter Einstellungen → Sicherheit fest.', 'err');
+        toast('Ohne Sicherheitsfrage geht das nicht. Am PC unter Einstellungen → Sicherheit eine neue PIN festlegen.', 'err');
         return;
       }
       if (!(await askSecurity('PIN vergessen'))) return;
-      if (!pin.fromPc) {
-        const r = await choosePin('Neue PIN für dieses Handy');
-        if (r) { lock.ownPin = r.hash; lock.ownPinLength = r.length; await saveLock(); toast('Neue PIN gespeichert'); }
-      } else toast('Entsperrt. Die PIN selbst änderst du am PC.');
+      const r = await choosePin('Neue Programm-PIN', 'Gilt auch am PC.');
+      if (r) { await setSingle('appPin', { hash: r.hash, length: r.length }); toast('Neue PIN gespeichert'); }
       unlock();
     } }, 'PIN vergessen?'));
     document.addEventListener('keydown', onKey);
@@ -233,14 +229,19 @@ export function choosePin(title, hint = '') {
   });
 }
 
-/** Eigene App-PIN festlegen (nur, wenn am PC keine PIN gesetzt ist). */
+/** Programm-PIN festlegen oder ändern (gilt am PC und auf allen Geräten). */
 export async function setOwnPin() {
-  if (lock.ownPin && !(await askSecurity('PIN ändern'))) return false;
-  const r = await choosePin('App-PIN festlegen');
+  if (activePin() && !(await askSecurity('PIN ändern'))) return false;
+  const r = await choosePin(activePin() ? 'Neue Programm-PIN' : 'Programm-PIN festlegen', 'Die PIN gilt auch am PC.');
   if (!r) return false;
-  lock.ownPin = r.hash;
-  lock.ownPinLength = r.length;
+  await setSingle('appPin', { hash: r.hash, length: r.length });
   lock.unlockedUntil = Date.now() + DAY;   // wer die PIN gerade festlegt, ist schon „entsperrt“
   await saveLock();
   return true;
+}
+
+export async function removePin() {
+  await setSingle('appPin', null);
+  lock.faceId = null;
+  await saveLock();
 }

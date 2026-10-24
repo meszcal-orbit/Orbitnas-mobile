@@ -1,5 +1,5 @@
 // Offline-Modus: Die App selbst liegt auf dem Gerät. Deine Daten (IndexedDB) fasst dieser Teil nie an.
-const BUILD = "035eca85a35d";
+const BUILD = "ced5f58155fa";
 const APP_CACHE = 'orbitnas-app-' + BUILD;
 const THUMBS = 'orbitnas-thumbs';
 const ASSETS = [
@@ -12,31 +12,35 @@ const ASSETS = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-maskable-512.png",
+  "./js/addcloud.js",
   "./js/app.js",
-  "./js/backup.js",
   "./js/crypto.js",
   "./js/db.js",
-  "./js/demo.js",
+  "./js/fileops.js",
   "./js/files.js",
-  "./js/locations.js",
+  "./js/fritz.js",
   "./js/lock.js",
-  "./js/log.js",
-  "./js/login.js",
   "./js/opsbar.js",
-  "./js/pairing.js",
-  "./js/pcloud.js",
+  "./js/picker.js",
   "./js/player.js",
   "./js/secq.js",
+  "./js/secrets.js",
   "./js/settings.js",
-  "./js/sync.js",
+  "./js/store.js",
   "./js/theme.js",
   "./js/ui.js",
   "./js/unzip.js",
   "./js/upload.js",
   "./js/util.js",
   "./js/version.js",
-  "./vendor/LIZENZEN.txt",
-  "./vendor/jsQR.js"
+  "./js/sources/base.js",
+  "./js/sources/demo.js",
+  "./js/sources/dropbox.js",
+  "./js/sources/gdrive.js",
+  "./js/sources/oauth.js",
+  "./js/sources/onedrive.js",
+  "./js/sources/pcloud.js",
+  "./js/sources/registry.js"
 ];
 
 self.addEventListener('install', (e) => {
@@ -64,11 +68,13 @@ self.addEventListener('fetch', (e) => {
   // Vorschaubilder aus pCloud: einmal geladen, auch offline sichtbar
   if (url.pathname.endsWith('/getthumb') && url.hostname.endsWith('pcloud.com')) {
     e.respondWith((async () => {
+      // Schlüssel ohne Anmelde-Kennung (auth), damit ein Bild nach neuer Anmeldung nicht neu geladen werden muss
+      const key = new URL(url); key.searchParams.delete('auth');
       const cache = await caches.open(THUMBS);
-      const hit = await cache.match(e.request);
+      const hit = await cache.match(key.href);
       if (hit) return hit;
       const res = await fetch(e.request);
-      if (res.ok) { cache.put(e.request, res.clone()); trimThumbs(cache); }
+      if (res.ok) { cache.put(key.href, res.clone()); trimThumbs(cache); }
       return res;
     })());
     return;

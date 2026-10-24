@@ -1,87 +1,86 @@
-// Vorgangsleiste wie am PC (0.6.1): alle laufenden Dinge (Hochladen, Vorgänge am PC, Aufträge) in einer festen,
-// schmalen Leiste unten. Sie verschiebt nichts; antippen klappt die Einzelheiten auf.
+// Vorgangsleiste wie am PC: alles, was gerade läuft (Hochladen, Kopieren, Verschieben, Löschen), in einer festen,
+// schmalen Leiste über der Tab-Leiste. Sie verschiebt nichts; antippen klappt die Einzelheiten auf.
 
-import { h, icon, sheet, clear } from './util.js';
-import { state, onChange, openJobs } from './sync.js';
-import { onQueue, stats, queue } from './upload.js';
+import { h, icon, sheet, clear, fmtSize } from './util.js';
+import { onQueue, stats, queue, cancel, retry, clearFinished } from './upload.js';
 
 let bar = null;
 let openSheet = null;
+const ops = new Set();
 
-const pcOps = () => (state.status?.operations || []).filter((o) => o.status === 'Läuft' || o.status === 'Wartet' || o.status === 'Pausiert');
-const jobs = () => openJobs().filter((j) => j.type !== 'liste');
+/** Einen Vorgang anzeigen. Rückgabe: { update(prozent, schritt), done() } */
+export function startOp(title) {
+  const op = { title, pct: null, step: '' };
+  ops.add(op);
+  paint();
+  return {
+    update: (pct, step) => { op.pct = pct; if (step) op.step = step; paint(); },
+    done: () => { ops.delete(op); paint(); },
+  };
+}
 
 function summary() {
   const up = stats();
-  const ops = pcOps();
-  const js = jobs();
+  let n = ops.size, sum = 0, cnt = 0;
   const parts = [];
-  let n = 0, sum = 0, cnt = 0;
-  if (up.active) { n += up.active; sum += up.bytes ? (up.loaded / up.bytes) * 100 : 0; cnt++; }
-  for (const o of ops) { n++; if (o.percent != null) { sum += o.percent; cnt++; } }
-  n += js.length;
+  if (up.active) { n += up.active; sum += up.bytes ? (up.loaded / up.bytes) * 100 : 0; cnt++; parts.push(`Hochladen ${up.done + up.skipped}/${up.total}`); }
+  for (const o of ops) { if (o.pct != null) { sum += o.pct; cnt++; } }
+  if (ops.size) parts.push(ops.size === 1 ? [...ops][0].title : `${ops.size} Vorgänge`);
   if (!n) return null;
-  if (up.active) parts.push(`Hochladen ${up.done + up.skipped}/${up.total}`);
-  if (ops.length) parts.push(ops.length === 1 ? ops[0].title : `${ops.length} am PC`);
-  if (js.length) parts.push(js.length === 1 ? '1 Auftrag' : `${js.length} Aufträge`);
   return { n, pct: cnt ? Math.round(sum / cnt) : null, text: parts.join(' · ') };
 }
 
 export function mountOpsBar(root) {
-  bar = h('button.opsbar', { onclick: details, 'aria-label': 'Vorgänge anzeigen' });
+  bar = h('button.opsbar', { onclick: details, 'aria-label': 'Vorgänge anzeigen', hidden: true });
   root.append(bar);
   paint();
 }
 
 function paint() {
+  if (openSheet) openSheet();
   if (!bar || !document.body.contains(bar)) return;
   const s = summary();
   document.documentElement.classList.toggle('has-ops', !!s);
   if (!s) { clear(bar); bar.hidden = true; return; }
   bar.hidden = false;
   clear(bar).append(
-    h('span.ob-text', h('b', `${s.n} ${s.n === 1 ? 'Vorgang' : 'Vorgänge'}`), s.pct != null ? ` · ${s.pct} %` : '', h('span.muted', ' · ' + s.text)),
+    h('span.ob-text', h('b', s.text), s.pct != null ? h('span.muted', ` · ${s.pct} %`) : null),
     icon('up'),
     h('div.ob-meter', h('div.fill', { style: { width: (s.pct ?? 0) + '%' } })));
-  if (openSheet) openSheet.paint();
 }
 
-function details() {
+export function details() {
   const body = h('div.dialog-body.obdetails');
-  const s = sheet(body, { title: 'Vorgänge', onClose: () => { openSheet = null; } });
+  sheet(body, { title: 'Vorgänge', onClose: () => { openSheet = null; } });
   const paintD = () => {
-    const up = stats();
-    const ops = pcOps();
-    const js = jobs();
     clear(body);
+    for (const o of ops) {
+      body.append(h('div.card.op', h('div.op-top', h('b', o.title), h('div.spinner.small')),
+        o.step ? h('div.muted.small', o.step) : null,
+        o.pct != null ? h('div.meter', h('div.fill', { style: { width: o.pct + '%' } })) : null));
+    }
+    const up = stats();
     if (up.total) {
       const pct = up.bytes ? Math.round((up.loaded / up.bytes) * 100) : 100;
       body.append(h('div.card.op',
-        h('div.op-top', h('b', 'Hochladen vom Handy'), h('span.pill.' + (up.active ? 'accent' : 'ok'), up.active ? 'Läuft' : 'Fertig')),
+        h('div.op-top', h('b', 'Hochladen'), h('span.muted.small', `${up.done} fertig · ${up.skipped} übersprungen${up.failed ? ` · ${up.failed} Fehler` : ''}${up.active ? ` · ${up.active} offen` : ''}`)),
         h('div.meter', h('div.fill', { style: { width: pct + '%' } })),
-        h('div.op-meta.muted.small', `${up.done} fertig · ${up.skipped} übersprungen${up.failed ? ` · ${up.failed} Fehler` : ''}${up.active ? ` · ${up.active} offen` : ''} · ${pct} %`),
-        h('button.btn.small', { onclick: async () => { s.close(); (await import('./files.js')).transfersSheet(); } }, 'Einzelne Dateien und Abbrechen …')));
+        h('div.uplist', [...queue].reverse().map((q) => {
+          const p = q.total ? Math.round((q.loaded / q.total) * 100) : 0;
+          const tone = { fertig: 'ok', übersprungen: 'muted', fehler: 'danger', läuft: 'accent', pausiert: 'warn' }[q.status] || 'muted';
+          return h('div.uprow',
+            h('div.upname', h('b', q.finalName || q.name), h('small', h('span.dot.' + tone), ` ${q.status === 'läuft' ? p + ' %' : q.status} · ${fmtSize(q.total)} → ${q.label}${q.message ? ' · ' + q.message : ''}`)),
+            q.status === 'übersprungen' ? h('button.btn.small', { onclick: () => retry(q, true) }, 'Trotzdem') : null,
+            q.status === 'fehler' && q.message !== 'Abgebrochen' ? h('button.btn.small', { onclick: () => retry(q) }, 'Nochmal') : null,
+            ['wartet', 'läuft', 'pausiert', 'prüfe'].includes(q.status) ? h('button.icon-btn', { 'aria-label': 'Abbrechen', onclick: () => cancel(q) }, icon('close')) : null);
+        })),
+        !up.active ? h('button.link', { onclick: clearFinished }, 'Liste leeren') : null,
+        h('p.muted.small', 'Schon hochgeladene Fotos und Videos werden erkannt und übersprungen. Bitte die App beim Hochladen geöffnet lassen; nach einer Unterbrechung geht es von selbst weiter.')));
     }
-    for (const o of ops) {
-      body.append(h('div.card.op',
-        h('div.op-top', h('b', o.title), h('span.pill.accent', o.status), o.fromPhone ? h('span.muted.small', 'vom Handy') : null),
-        o.step ? h('div.muted', o.step) : null,
-        o.percent != null ? h('div.meter', h('div.fill', { style: { width: Math.round(o.percent) + '%' } })) : null,
-        h('div.op-meta.muted.small', [o.percent != null ? Math.round(o.percent) + ' %' : '', o.bytesText, o.speedText, o.etaText].filter(Boolean).join(' · ')),
-        o.currentFile ? h('div.muted.small.ellipsis', o.currentFile) : null));
-    }
-    for (const j of js) {
-      body.append(h('div.card.op',
-        h('div.op-top', h('b', j.label), h('span.pill.' + (j.state === 'laeuft' ? 'accent' : 'muted'), j.state === 'laeuft' ? 'Läuft' : 'Wartet auf den PC')),
-        j.message && !/^Wartet/.test(j.message) ? h('div.muted.small', j.message) : null));
-    }
-    if (!up.total && !ops.length && !js.length) body.append(h('p.muted', 'Gerade läuft nichts.'));
-    if (ops.length) body.append(h('p.muted.small', 'Vorgänge am PC hältst du am PC an (unten in der Vorgangsleiste).'));
+    if (!ops.size && !up.total) body.append(h('p.muted', 'Gerade läuft nichts.'));
   };
-  openSheet = { paint: paintD };
+  openSheet = paintD;
   paintD();
 }
 
 onQueue(paint);
-onChange((w) => { if (w === 'status' || w === 'jobs' || w === 'sync') paint(); });
-export { queue };

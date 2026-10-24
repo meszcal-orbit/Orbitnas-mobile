@@ -1,9 +1,9 @@
 // Sicherheitsfrage (wie am PC, Schnittstelle Abschnitt 11): Frage und Antwort wählt Dennis selbst.
-// Sie wird zusätzlich abgefragt bei heiklen Schritten: PIN vergessen, PIN ändern oder abschalten, neu koppeln.
+// Sie wird zusätzlich abgefragt bei heiklen Schritten: PIN vergessen, PIN ändern oder abschalten.
 // Gespeichert wird nur ein Hash der Antwort (PBKDF2-SHA256, 32 Byte; Antwort getrimmt, klein, NFC).
 
 import { h, toast, sheet } from './util.js';
-import { state, sendJob, patchStatus, isDemo } from './sync.js';
+import { security, setSingle } from './store.js';
 
 const ITER = 100000;
 const norm = (a) => (a || '').trim().toLowerCase().normalize('NFC');
@@ -15,8 +15,7 @@ async function derive(answer, salt, iterations) {
   return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, 256));
 }
 
-export const securityQuestion = () => state.status?.security?.hash ? state.status.security : null;
-export const securitySupported = () => isDemo() || (state.status?.schema || 1) >= 4;
+export const securityQuestion = () => security();
 
 export async function checkAnswer(answer, sec = securityQuestion()) {
   if (!sec) return true;
@@ -58,11 +57,9 @@ export function askSecurity(reason) {
 
 /** Frage festlegen, ändern oder entfernen (gilt am PC und auf allen Handys). */
 export async function editSecurity({ remove = false } = {}) {
-  if (!securitySupported()) { toast('Dafür braucht der PC Orbit NAS 0.6.1 oder neuer.', 'err'); return false; }
   if (!(await askSecurity(remove ? 'Sicherheitsfrage entfernen' : 'Sicherheitsfrage ändern'))) return false;
   if (remove) {
-    await sendJob('sicherheitsfrage', { question: '', salt: '', hash: '' }, 'Sicherheitsfrage entfernen');
-    await patchStatus((st) => { st.security = null; });
+    await setSingle('security', null);
     toast('Sicherheitsfrage entfernt');
     return true;
   }
@@ -80,15 +77,14 @@ export async function editSecurity({ remove = false } = {}) {
       msg.className = 'muted'; msg.textContent = 'Wird gespeichert …';
       const salt = crypto.getRandomValues(new Uint8Array(16));
       const sec = { question: q.value.trim(), salt: b64(salt), hash: b64(await derive(a1.value, salt, ITER)), iterations: ITER };
-      await sendJob('sicherheitsfrage', { question: sec.question, salt: sec.salt, hash: sec.hash }, 'Sicherheitsfrage festlegen');
-      await patchStatus((st) => { st.security = sec; });
+      await setSingle('security', sec);
       done = true;
       s.close();
       toast('Sicherheitsfrage gespeichert – gilt auch am PC');
       resolve(true);
     };
     const s = sheet(h('form.dialog-body.secq', { onsubmit: submit },
-      h('p.muted.small', 'Frage und Antwort wählst du selbst. Sie werden bei heiklen Schritten zusätzlich abgefragt: PIN vergessen, PIN ändern oder abschalten, Handy neu koppeln und Verschlüsselung abschalten. Gespeichert wird nur ein unlesbarer Fingerabdruck der Antwort.'),
+      h('p.muted.small', 'Frage und Antwort wählst du selbst. Sie werden bei heiklen Schritten zusätzlich abgefragt: PIN vergessen, PIN ändern oder abschalten, Ordner-PIN entfernen und (am PC) Verschlüsselung abschalten. Gespeichert wird nur ein unlesbarer Fingerabdruck der Antwort.'),
       q, a1, a2, msg,
       h('button.btn.primary.block', { type: 'submit' }, 'Speichern')),
     { title: 'Sicherheitsfrage', onClose: () => { if (!done) resolve(false); } });

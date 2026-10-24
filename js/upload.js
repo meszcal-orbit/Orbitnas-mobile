@@ -1,6 +1,10 @@
-// Warteschlange zum Hochladen nach pCloud mit Doppelt-Schutz und automatischem Weitermachen.
+// Warteschlange zum Hochladen in eine Cloud: Doppelt-Schutz, Namensregel „Name (2).jpg“, Weitermachen nach Unterbrechung.
+// Gleiche Datei schon im Zielordner (gleiche Größe und Prüfsumme) → still überspringen; anderer Inhalt → neuer Name.
 
-import { state, updateHandy, deviceName } from './sync.js';
+import { kv } from './db.js';
+import { source, connById } from './sources/registry.js';
+import { uniqueName } from './sources/base.js';
+import { dropboxHash } from './sources/dropbox.js';
 import { fingerprint } from './crypto.js';
 import { uid, fmtDate, sleep } from './util.js';
 
@@ -11,14 +15,17 @@ const emit = () => listeners.forEach((fn) => fn());
 
 let running = false;
 let current = null;
+let known = null;
+async function registry() { if (!known) known = (await kv.get('uploads')) || {}; return known; }
 
 /**
- * Dateien in die Warteschlange. targetPath = Ordner in pCloud. after(item): wird nach dem Hochladen aufgerufen
- * (z. B. Auftrag an den PC, die Datei aus dem Eingang auf den Speicher zu verschieben). label = Zielname für die Anzeige.
+ * Dateien hochladen. files: File[] oder [{ name, size, load: () => Promise<Blob> }] (z. B. beim Kopieren zwischen Clouds).
+ * connId/folder: Ziel. after(item): nach dem Hochladen (z. B. Original löschen beim Verschieben).
  */
-export function addFiles(files, targetPath, { force = false, after = null, label = null } = {}) {
-  for (const file of files) {
-    queue.push({ id: uid(), file, name: file.name || 'Datei', targetPath, label: label || targetPath, after, status: 'wartet', loaded: 0, total: file.size, force, state: {}, tries: 0 });
+export function addFiles(files, connId, folder, { force = false, after = null, label = null, register = true } = {}) {
+  for (const f of files) {
+    queue.push({ id: uid(), file: f.load ? null : f, load: f.load || null, name: f.name || 'Datei', connId, folder, label: label || folder, after, register,
+      status: 'wartet', loaded: 0, total: f.size || 0, force, state: {}, tries: 0 });
   }
   emit();
   run();
@@ -37,58 +44,41 @@ export function stats() {
 }
 
 export function clearFinished() {
-  for (let i = queue.length - 1; i >= 0; i--) if (['fertig', 'übersprungen'].includes(queue[i].status)) queue.splice(i, 1);
+  for (let i = queue.length - 1; i >= 0; i--) if (['fertig', 'übersprungen', 'fehler'].includes(queue[i].status)) queue.splice(i, 1);
   emit();
 }
 
 export function cancel(item) {
   if (item === current && item.abort) item.abort.abort();
-  const i = queue.indexOf(item);
-  if (i >= 0 && item !== current) queue.splice(i, 1);
   item.status = 'fehler';
   item.message = 'Abgebrochen';
   emit();
 }
 
 export function retry(item, force = false) {
-  item.status = 'wartet';
-  item.message = '';
-  item.tries = 0;
+  Object.assign(item, { status: 'wartet', message: '', tries: 0 });
   if (force) item.force = true;
   emit();
   run();
 }
 
-const folderCache = new Map();
-async function folderInfo(path) {
-  if (!folderCache.has(path)) {
-    await state.backend.mkdir(path).catch(() => {});
-    const list = await state.backend.list(path);
-    folderCache.set(path, list);
-  }
-  return folderCache.get(path);
+const folders = new Map();
+async function folderList(src, connId, path) {
+  const k = connId + ':' + path;
+  if (!folders.has(k)) folders.set(k, await src.list(path));
+  return folders.get(k);
 }
 
-/** Vergleicht die Datei mit der gleichnamigen in pCloud über die Prüfsumme (wie am PC). Sehr große Dateien: gleiche Größe genügt. */
-async function sameAsInCloud(file, remote) {
-  if (!remote.fileid || !state.backend.checksum || file.size > 300 * 1024 * 1024) return true;
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+/** Gleicher Inhalt wie die Datei in der Cloud? Ohne Prüfsumme der Cloud (oder bei sehr großen Dateien) genügt die gleiche Größe. */
+async function sameContent(src, file, remote) {
+  if (!src.checksum || file.size > 300 * 1024 * 1024) return true;
   try {
-    const { algo, hex } = await state.backend.checksum(remote.fileid);
-    if (!hex) return true;
-    const d = new Uint8Array(await crypto.subtle.digest(algo, await file.arrayBuffer()));
-    return [...d].map((b) => b.toString(16).padStart(2, '0')).join('') === hex;
+    const c = await src.checksum(remote);
+    if (!c?.hex) return true;
+    if (c.algo === 'DROPBOX') return (await dropboxHash(file)) === c.hex;
+    return hex(await crypto.subtle.digest(c.algo, await file.arrayBuffer())) === c.hex;
   } catch { return true; }
-}
-
-function uniqueName(name, taken) {
-  if (!taken.has(name.toLowerCase())) return name;
-  const dot = name.lastIndexOf('.');
-  const base = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  for (let n = 2; ; n++) {
-    const c = `${base} (${n})${ext}`;
-    if (!taken.has(c.toLowerCase())) return c;
-  }
 }
 
 async function run() {
@@ -106,7 +96,7 @@ async function run() {
     }
   } finally {
     running = false;
-    folderCache.clear();
+    folders.clear();
     emit();
   }
 }
@@ -115,45 +105,45 @@ async function process(item) {
   try {
     item.status = 'prüfe';
     emit();
-    if (!item.fp) item.fp = await fingerprint(item.file);
-    const known = state.handy.uploads?.[item.fp];
-    if (known && !item.force) {
+    const src = await source(item.connId);
+    if (!item.file) { item.file = new File([await item.load()], item.name); item.total = item.file.size; }
+    const reg = await registry();
+    if (item.register && !item.fp) item.fp = await fingerprint(item.file);
+    const seen = item.fp && reg[item.fp];
+    if (seen && !item.force && seen.c === item.connId) {
       item.status = 'übersprungen';
-      item.message = `Schon hochgeladen am ${fmtDate(known.t, false)} nach ${known.p}` + (known.d ? ` (von ${known.d})` : '');
+      item.message = `Schon hochgeladen am ${fmtDate(seen.t, false)} nach ${seen.p}`;
       return;
     }
-    const folder = await folderInfo(item.targetPath);
-    const same = folder.items.find((x) => !x.isFolder && x.name.toLowerCase() === item.name.toLowerCase());
-    if (same && same.size === item.file.size && !item.force && await sameAsInCloud(item.file, same)) {
+    const list = await folderList(src, item.connId, item.folder);
+    const same = list.find((x) => !x.isFolder && x.name.toLowerCase() === item.name.toLowerCase());
+    if (same && same.size === item.file.size && !item.force && await sameContent(src, item.file, same)) {
       item.status = 'übersprungen';
       item.message = 'Liegt schon in diesem Ordner (gleicher Inhalt)';
-      await register(item, item.label);
+      await remember(item);
+      if (item.after) await item.after(item).catch(() => {});
       return;
     }
-    if (!item.finalName) item.finalName = uniqueName(item.name, new Set(folder.items.map((x) => x.name.toLowerCase())));
+    if (!item.finalName) item.finalName = uniqueName(item.name, new Set(list.map((x) => x.name.toLowerCase())));
     item.status = 'läuft';
     item.abort = new AbortController();
     emit();
-    let lastEmit = 0;
-    const meta = await state.backend.upload(item.file, folder.folderid, item.finalName, {
-      signal: item.abort.signal,
-      state: item.state,
-      onProgress: (loaded) => {
-        item.loaded = loaded;
-        if (Date.now() - lastEmit > 250) { lastEmit = Date.now(); emit(); }
-      },
+    let last = 0;
+    await src.upload(item.file, item.folder, item.finalName, {
+      signal: item.abort.signal, state: item.state,
+      onProgress: (n) => { item.loaded = n; if (Date.now() - last > 250) { last = Date.now(); emit(); } },
     });
     item.loaded = item.total;
     item.status = 'fertig';
     item.message = item.finalName !== item.name ? `Gespeichert als „${item.finalName}“` : '';
-    folder.items.push({ name: item.finalName, isFolder: false, size: item.file.size, ...(meta || {}) });
-    await register(item, item.label);
+    list.push({ name: item.finalName, isFolder: false, size: item.file.size });
+    await remember(item);
+    if (item.load) item.file = null;   // Speicher freigeben
     if (item.after) { try { await item.after(item); } catch (e) { item.message = 'Hochgeladen, aber: ' + e.message; } }
   } catch (e) {
     if (e.name === 'AbortError' && item.message === 'Abgebrochen') return;
     item.tries++;
     if ((e.offline || e.name === 'AbortError' || document.visibilityState === 'hidden') && item.tries < 30) {
-      // Verbindung weg oder App im Hintergrund: warten und an derselben Stelle weitermachen.
       item.status = 'pausiert';
       item.message = 'Wartet auf Verbindung …';
       emit();
@@ -164,16 +154,16 @@ async function process(item) {
       await sleep(5000 * item.tries);
     } else {
       item.status = 'fehler';
-      item.message = e.message || String(e);
+      item.message = e.message + (e.detail ? ` (${e.detail})` : '');
     }
   }
 }
 
-async function register(item, path) {
-  await updateHandy((hd) => {
-    hd.uploads = hd.uploads || {};
-    hd.uploads[item.fp] = { n: item.finalName || item.name, p: path, s: item.file.size, t: new Date().toISOString(), d: deviceName() };
-  });
+async function remember(item) {
+  if (!item.fp) return;
+  const reg = await registry();
+  reg[item.fp] = { n: item.finalName || item.name, p: (connById(item.connId)?.name || '') + ' › ' + (item.folder === '/' ? '' : item.folder.slice(1).replace(/\//g, ' › ')), c: item.connId, t: new Date().toISOString() };
+  await kv.set('uploads', reg);
 }
 
 function waitVisible() {
@@ -186,11 +176,7 @@ function waitOnline() {
   if (navigator.onLine && document.visibilityState === 'visible') return Promise.resolve();
   return new Promise((r) => {
     const f = () => {
-      if (navigator.onLine && document.visibilityState === 'visible') {
-        window.removeEventListener('online', f);
-        document.removeEventListener('visibilitychange', f);
-        r();
-      }
+      if (navigator.onLine && document.visibilityState === 'visible') { window.removeEventListener('online', f); document.removeEventListener('visibilitychange', f); r(); }
     };
     window.addEventListener('online', f);
     document.addEventListener('visibilitychange', f);

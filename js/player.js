@@ -1,9 +1,11 @@
 // Wiedergabe in der App wie der Player am PC: Bühne, Infos, „Als Nächstes“ mit Autoplay, Fortsetzen an der letzten Stelle.
 
-import { h, icon, kindOf, kindIcon, KIND_COLOR, fmtSize, fmtDate, toast, clear } from './util.js';
-import { state, isDemo } from './sync.js';
+import { h, icon, kindOf, kindIcon, fmtSize, fmtDate, toast, clear } from './util.js';
 import { kv } from './db.js';
-import { linkFor, fetchViaPc, download, locName, thumbImg } from './locations.js';
+import { source } from './sources/registry.js';
+import { download, connName, thumbOrGlyph, addRecent, errText } from './fileops.js';
+
+const linkFor = async (it) => it.localUrl || (await source(it.conn)).mediaUrl(it);
 
 const playable = (k) => k === 'video' || k === 'audio';
 const sameGroup = (a, b) => a === b || (playable(a) && playable(b));
@@ -53,7 +55,7 @@ export function openPlayer(item, items = [item], { onMenu } = {}) {
     root.classList.remove('show');
     setTimeout(() => root.remove(), 200);
   }
-  const key = (it) => 'pos:' + it.location + ':' + it.rel;
+  const key = (it) => 'pos:' + it.conn + ':' + it.path;
   function savePos() {
     if (!media || !media.duration || !isFinite(media.duration)) return;
     const it = list[index];
@@ -73,34 +75,32 @@ export function openPlayer(item, items = [item], { onMenu } = {}) {
     title.textContent = it.name;
     root.querySelector('.pl-count').textContent = list.length > 1 ? `${index + 1} von ${list.length}` : '';
     clear(meta).append(
-      h('span', [fmtSize(it.size), fmtDate(it.mtime), locName(it.location) + (it.rel.includes('/') ? ' › ' + it.rel.slice(0, it.rel.lastIndexOf('/')).replace(/\//g, ' › ') : '')].filter(Boolean).join(' · ')),
+      h('span', [fmtSize(it.size), fmtDate(it.mtime), (it.local || connName(it.conn)) + (it.path.lastIndexOf('/') > 0 ? ' › ' + it.path.slice(1, it.path.lastIndexOf('/')).replace(/\//g, ' › ') : '')].filter(Boolean).join(' · ')),
       h('span.spacer'),
-      h('button.chip', { onclick: () => download(it) }, icon('download'), ' Herunterladen'),
+      h('button.chip', { onclick: () => download(it) }, icon('share'), ' Teilen / Sichern'),
       onMenu ? h('button.chip', { onclick: () => { close(); onMenu(it); } }, icon('more'), ' Weitere Aktionen') : null);
     paintList();
-    clear(stage).append(h('div.spinner'));
-    let link = null;
-    try { link = await linkFor(it); } catch (e) { if (my === seq) showError('Kann nicht geladen werden', e.message); return; }
-    if (my !== seq) return;
-    if (!link) {
-      clear(stage).append(h('div.pl-error', icon(kindIcon[k], 'big'),
-        h('div.big', isDemo() ? 'Im Beispiel ohne Inhalt' : 'Diese Datei liegt nur am PC bzw. auf der FRITZ!NAS'),
-        isDemo() ? null : h('p.muted', 'Der PC kann sie in pCloud bereitstellen. Das dauert bis zu 2 Minuten, solange Orbit NAS am PC läuft.'),
-        isDemo() ? null : h('button.btn.primary', { onclick: async (e) => {
-          e.target.disabled = true;
-          e.target.textContent = 'Wartet auf den PC …';
-          try { await fetchViaPc(it); if (my === seq) show(index); } catch (er) { if (my === seq) showError('Nicht bereitgestellt', er.message); }
-        } }, 'Aufs Handy holen')));
+    const previewable = ['image', 'video', 'audio', 'pdf'].includes(k) || it.google || ((k === 'text' || k === 'code') && it.size < 2e6);
+    if (!previewable) {
+      addRecent(it).catch(() => {});
+      clear(stage).append(h('div.pl-error', icon(kindIcon[k], 'big'), h('div.big', 'Keine Vorschau für diese Art von Datei'),
+        h('p.muted', 'Mit „Teilen / Sichern“ kannst du sie in einer anderen App öffnen oder in „Dateien“ sichern.'),
+        h('button.btn.primary', { onclick: () => download(it) }, icon('share'), ' Teilen / Sichern')));
       return;
     }
+    clear(stage).append(h('div.pl-loading', h('div.spinner'), it.size > 20e6 ? h('small.muted', 'Große Datei – wird geladen …') : null));
+    addRecent(it).catch(() => {});
+    let link = null;
+    try { link = await linkFor(it); } catch (e) { if (my === seq) showError('Kann nicht geladen werden', errText(e)); return; }
+    if (my !== seq) return;
     clear(stage);
     if (k === 'image') showImage(link, it);
     else if (k === 'video' || k === 'audio') await showMedia(link, it, k);
-    else if (k === 'pdf') stage.append(h('div.pl-error', icon('pdf', 'big'), h('div.big', it.name), h('button.btn.primary', { onclick: () => window.open(link, '_blank') }, 'PDF öffnen')));
+    else if (k === 'pdf' || it.google) stage.append(h('div.pl-error', icon('pdf', 'big'), h('div.big', it.name), h('a.btn.primary', { href: link, target: '_blank', rel: 'noopener' }, 'PDF öffnen'), h('button.btn', { onclick: () => download(it) }, icon('share'), ' In anderer App öffnen')));
     else if ((k === 'text' || k === 'code') && it.size < 2e6) {
       try { const t = await (await fetch(link)).text(); if (my === seq) stage.append(h('pre.pl-text', t)); } catch (e) { showError('Kann nicht geladen werden', e.message); }
     } else stage.append(h('div.pl-error', icon(kindIcon[k], 'big'), h('div.big', 'Keine Vorschau für diese Art von Datei'),
-      h('p.muted', 'Mit „Herunterladen“ kannst du sie in einer anderen App öffnen.')));
+      h('p.muted', 'Mit „Teilen / Sichern“ kannst du sie in einer anderen App öffnen oder in „Dateien“ sichern.')));
     preload();
   }
 
@@ -136,7 +136,7 @@ export function openPlayer(item, items = [item], { onMenu } = {}) {
     el.addEventListener('error', () => {
       if (media !== el) return;
       showError('Kann hier nicht abgespielt werden', k === 'video'
-        ? 'iPhone und iPad spielen MP4 und MOV ab, aber z. B. kein MKV, AVI oder WMV. Tipp: „Herunterladen“ und mit einer Player-App wie VLC öffnen.'
+        ? 'iPhone und iPad spielen MP4 und MOV ab, aber z. B. kein MKV, AVI oder WMV. Tipp: „Teilen / Sichern“ und mit einer Player-App wie VLC öffnen.'
         : 'Dieses Tonformat spielt iOS nicht ab.');
     });
     el.addEventListener('ended', () => { kv.set(key(it), 0).catch(() => {}); if (autoplay && list.length > 1 && index < list.length - 1) show(index + 1); });
@@ -155,8 +155,7 @@ export function openPlayer(item, items = [item], { onMenu } = {}) {
   function paintList() {
     if (list.length < 2) return;
     clear(side).append(...list.map((x, i) => {
-      const kx = kindOf(x.name);
-      const thumb = x.kind === 'pcloud' && x.thumb ? thumbImg('img', x.fileid, '120x120') : h('span.pl-glyph', { style: { color: KIND_COLOR[kx] } }, icon(kindIcon[kx]));
+      const thumb = thumbOrGlyph(x, 'm');
       return h('button.pl-item' + (i === index ? '.on' : ''), { onclick: () => show(i) }, h('span.pl-thumb', thumb), h('span.pl-name', x.name, h('small', fmtSize(x.size))));
     }));
     side.querySelector('.on')?.scrollIntoView({ block: 'nearest' });

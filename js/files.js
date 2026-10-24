@@ -735,6 +735,7 @@ onQueue(() => { if (view && document.body.contains(view.querySelector('.fstatus'
 onChange((w) => {
   if (!view || !document.body.contains(view.querySelector('.files'))) return;
   if (w === 'status' || w === 'sync') { paintTree(); }
+  if (w === 'refresh' && !document.querySelector('.backdrop, .player') && (cur.loc === ALL || (state.lastRefresh || []).includes(cur.loc))) refresh();
 });
 
 // Tastatur am iPad: Strg/⌘ + C, X, V, Entf, F2

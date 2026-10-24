@@ -332,7 +332,7 @@ async function pollResults() {
     const extra = [r.skipped?.length && `${r.skipped.length} schon vorhanden, übersprungen`,
       r.renamed?.length && (r.renamed.length === 1 ? `gespeichert als „${r.renamed[0].to.split('/').pop()}“` : `${r.renamed.length} umbenannt (… (2))`)].filter(Boolean);
     if (extra.length) j.message = [j.message, ...extra].filter(Boolean).join(' · ');
-    if (r.refresh?.length) refreshAfterJob = true;
+    if (r.refresh?.length) { refreshAfterJob = true; r.refresh.forEach((l) => refreshLocs.add(l)); }
     changed = true;
   }
   if (refreshAfterJob) {
@@ -341,11 +341,15 @@ async function pollResults() {
     const seen = (await kv.get('seenStamps')) || {};
     delete seen.status; delete seen.index;
     await kv.set('seenStamps', seen);
-    setTimeout(() => sync().catch(() => {}), 1500);
+    const locs = [...refreshLocs];
+    refreshLocs.clear();
+    // Nach dem Abgleich die betroffenen Orte neu zeigen (z. B. pCloud UND Speicher, wenn der PC aufs Original umgeleitet hat)
+    setTimeout(() => sync().catch(() => {}).finally(() => { state.lastRefresh = locs; emit('refresh'); }), 1500);
   }
   if (changed) { await saveJobs(); emit('jobs'); }
 }
 let refreshAfterJob = false;
+const refreshLocs = new Set();
 
 /** Aufträge speichern; Listen-Ergebnisse (entries) nur im Zwischenspeicher, damit die Liste klein bleibt. */
 async function saveJobs() {

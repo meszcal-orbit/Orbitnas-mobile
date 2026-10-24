@@ -4,8 +4,15 @@ import { kv } from './db.js';
 import { verifyHash, makeHash, bytesToB64url, b64urlToBytes } from './crypto.js';
 import { state } from './sync.js';
 import { h, icon, toast, sheet } from './util.js';
+import { securityQuestion, askSecurity } from './secq.js';
 
-export const lock = { faceId: null, ownPin: null, ownPinLength: 4, autoLockMin: 2 };
+export const lock = { faceId: null, ownPin: null, ownPinLength: 4, autoLockMin: 2, stay24h: true, unlockedUntil: 0 };
+const DAY = 24 * 3600 * 1000;
+
+/** Nach dem Entsperren 24 Stunden auf diesem Gerät keine Programm-PIN (gilt nicht für Ordner-PINs). */
+export const within24h = () => lock.stay24h && Date.now() < (lock.unlockedUntil || 0);
+/** Schloss-Knopf: sofort sperren, auch innerhalb der 24 Stunden. */
+export async function lockImmediately() { lock.unlockedUntil = 0; await saveLock(); }
 export async function loadLock() { Object.assign(lock, (await kv.get('lock')) || {}); }
 export const saveLock = () => kv.set('lock', { ...lock });
 
@@ -117,14 +124,17 @@ function pinPad({ length = 4, isPin = true, onDone, extra }) {
 let locked = false;
 export const isLocked = () => locked;
 
-export function showLockScreen() {
+export function showLockScreen({ force = false } = {}) {
   if (locked || !lockEnabled()) return Promise.resolve();
+  if (!force && within24h()) return Promise.resolve();
   locked = true;
   return new Promise((resolve) => {
     const pin = activePin();
     const screen = h('div.lockscreen');
     const unlock = () => {
       locked = false;
+      lock.unlockedUntil = Date.now() + DAY;
+      saveLock().catch(() => {});
       document.removeEventListener('keydown', onKey);
       screen.classList.add('hide');
       setTimeout(() => screen.remove(), 250);
@@ -145,6 +155,18 @@ export function showLockScreen() {
       screen.append(h('p.muted', 'Mit Face ID entsperren'), h('button.btn.primary', { onclick: tryFace }, icon('face'), ' Entsperren'));
       var onKey = () => {};
     }
+    if (pin) screen.append(h('button.link.forgot', { onclick: async () => {
+      if (!securityQuestion()) {
+        toast(pin.fromPc ? 'Ohne Sicherheitsfrage: am PC unter Einstellungen → Sicherheit eine neue PIN festlegen.' : 'Ohne Sicherheitsfrage geht das nicht. Lege sie später unter Einstellungen → Sicherheit fest.', 'err');
+        return;
+      }
+      if (!(await askSecurity('PIN vergessen'))) return;
+      if (!pin.fromPc) {
+        const r = await choosePin('Neue PIN für dieses Handy');
+        if (r) { lock.ownPin = r.hash; lock.ownPinLength = r.length; await saveLock(); toast('Neue PIN gespeichert'); }
+      } else toast('Entsperrt. Die PIN selbst änderst du am PC.');
+      unlock();
+    } }, 'PIN vergessen?'));
     document.addEventListener('keydown', onKey);
     document.body.append(screen);
     if (lock.faceId) setTimeout(tryFace, 400);
@@ -164,6 +186,7 @@ export function askPin(title, hash, length = 4) {
       }, icon('face')) : null,
     });
     body.append(pad);
+    if (securityQuestion()) body.append(h('button.link.forgot', { onclick: async () => { if (await askSecurity('Ordner-PIN vergessen')) { ok = true; s.close(); } } }, 'PIN vergessen?'));
     const onKey = (e) => pad.onKey && pad.onKey(e);
     document.addEventListener('keydown', onKey);
     const origClose = s.close;
@@ -212,10 +235,12 @@ export function choosePin(title, hint = '') {
 
 /** Eigene App-PIN festlegen (nur, wenn am PC keine PIN gesetzt ist). */
 export async function setOwnPin() {
+  if (lock.ownPin && !(await askSecurity('PIN ändern'))) return false;
   const r = await choosePin('App-PIN festlegen');
   if (!r) return false;
   lock.ownPin = r.hash;
   lock.ownPinLength = r.length;
+  lock.unlockedUntil = Date.now() + DAY;   // wer die PIN gerade festlegt, ist schon „entsperrt“
   await saveLock();
   return true;
 }

@@ -216,7 +216,12 @@ export const direct = (locId, rel) => locById(locId)?.mode === 'pcloud' && !isPr
 export function writable(locId, rel) {
   const loc = locById(locId);
   if (!loc || loc.mode === 'all' || readOnlyFor(locId, rel)) return false;
-  if (loc.mode === 'pcloud') return !isProtectedPcloud('/' + rel);
+  // Ab PC 0.6.1 blockt nichts mehr: Änderungen in den Sicherungsordnern von pCloud erledigt der PC (zieht alle Quellen mit).
+  // Nur der Grundordner selbst und die Systemordner bleiben tabu.
+  if (loc.mode === 'pcloud' && isProtectedPcloud('/' + rel)) {
+    const inner = ('/' + rel).slice(basePath().length).replace(/^\/+/, '');
+    return !!inner && !/^\./.test(inner) && pcSupports(4);
+  }
   return true;
 }
 
@@ -229,6 +234,9 @@ async function viaPc(type, args, label, { ask, quiet } = {}) {
   return id;
 }
 export { viaPc };
+
+/** Kann der PC das schon (status.schema)? */
+export const pcSupports = (schema) => isDemo() || (state.status?.schema || 1) >= schema;
 
 const parentOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
 
@@ -248,7 +256,9 @@ export async function remove(items) {
   const anyPc = items.some((it) => !(it.kind === 'pcloud' && direct(it.location, it.rel)));
   const fritz = items.some((it) => locById(it.location)?.kind === 'disk');
   const what = items.length === 1 ? `„${items[0].name}“` : `${items.length} Einträge`;
-  const text = `${what} löschen?` + (fritz ? ' Auf der FRITZ!Box-Festplatte ist das endgültig.' : anyPc ? ' Am PC landet es im Papierkorb.' : ' Es landet im pCloud-Papierkorb.');
+  const backedUp = items.some((it) => it.location === 'storage' && it.isFolder && managedFor(it.rel));
+  const text = `${what} löschen?` + (fritz ? ' Auf der FRITZ!Box-Festplatte ist das endgültig.' : anyPc ? ' Am PC landet es im Papierkorb.' : ' Es landet im pCloud-Papierkorb.')
+    + (backedUp ? ' Es wird auch in allen Sicherungen gelöscht. Wo Versionen gesichert werden, bleibt der alte Stand dort erhalten.' : '');
   if (!(await confirmDialog(text, { title: 'Löschen', ok: 'Löschen', danger: true }))) return 0;
   let n = 0;
   for (const it of items) {
@@ -270,6 +280,38 @@ export function setClipboard(items, cut) {
   toast(`${items.length === 1 ? '„' + items[0].name + '“' : items.length + ' Einträge'} ${cut ? 'ausgeschnitten' : 'kopiert'}. Jetzt Zielordner öffnen und „Einfügen“.`);
 }
 
+/**
+ * Einfügen innerhalb von pCloud mit derselben Regel wie am PC: Gibt es am Ziel schon etwas mit dem Namen,
+ * wird bei gleichem Inhalt übersprungen, sonst als „Name (2)“ abgelegt.
+ */
+async function pastePcloud(it, rel, fid, cut) {
+  const b = state.backend;
+  const target = await b.list('/' + rel).catch(() => ({ items: [] }));
+  const taken = new Set(target.items.map((x) => x.name.toLowerCase()));
+  let toname = it.name;
+  if (taken.has(it.name.toLowerCase())) {
+    const same = target.items.find((x) => x.name.toLowerCase() === it.name.toLowerCase());
+    if (!it.isFolder && !same.isFolder && same.size === it.size && await b.sameContent(it, same)) {
+      if (cut) await b.remove(it);
+      return 'skipped';
+    }
+    toname = uniqueName(it.name, taken);
+  }
+  await (cut ? b.move(it, fid, toname) : b.copy(it, fid, toname));
+  return 'done';
+}
+
+export function uniqueName(name, taken) {
+  if (!taken.has(name.toLowerCase())) return name;
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let n = 2; ; n++) {
+    const c = `${base} (${n})${ext}`;
+    if (!taken.has(c.toLowerCase())) return c;
+  }
+}
+
 export async function paste(locId, rel) {
   const items = clipboard.items;
   if (!items.length) return 0;
@@ -277,15 +319,17 @@ export async function paste(locId, rel) {
   let fid = null;
   let n = 0;
   let jobs = 0;
+  let skipped = 0;
   for (const it of items) {
     if (it.isFolder && it.location === locId && (rel + '/').startsWith(it.rel + '/')) { toast('Ein Ordner kann nicht in sich selbst.', 'err'); continue; }
     if (cut && it.location === locId && parentOf(it.rel) === rel) continue;
     try {
       if (it.kind === 'pcloud' && direct(locId, rel) && it.location === locId && (!cut || direct(it.location, it.rel))) {
         if (fid == null) fid = await state.backend.folderId('/' + rel || '/');
-        await (cut ? state.backend.move(it, fid) : state.backend.copy(it, fid));
+        const r = await pastePcloud(it, rel, fid, cut);
+        if (r === 'skipped') { skipped++; continue; }
       } else {
-        await sendJob(cut ? 'verschieben' : 'kopieren', { from: { location: it.location, path: it.rel }, to: { location: locId, folder: rel } },
+        await sendJob(cut ? 'verschieben' : 'kopieren', { from: { location: it.location, path: it.rel }, to: { location: locId, folder: rel }, conflict: 'auto' },
           `„${it.name}“ ${cut ? 'verschieben' : 'kopieren'} nach ${locName(locId)}${rel ? ' › ' + rel.replace(/\//g, ' › ') : ''}`);
         jobs++;
       }
@@ -294,7 +338,7 @@ export async function paste(locId, rel) {
   }
   if (cut) { clipboard.items = []; clipboard.cut = false; }
   if (jobs) toast(`${jobs === 1 ? 'Auftrag' : jobs + ' Aufträge'} an den PC gesendet`);
-  else if (n) toast(`${n} ${cut ? 'verschoben' : 'eingefügt'}`);
+  else if (n || skipped) toast([n && `${n} ${cut ? 'verschoben' : 'eingefügt'}`, skipped && `${skipped} schon vorhanden (gleicher Inhalt, übersprungen)`].filter(Boolean).join(' · '));
   return n;
 }
 

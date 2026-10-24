@@ -328,6 +328,10 @@ async function pollResults() {
     Object.assign(j, { state: r.state, progress: r.progress, message: r.message || '', pickup: r.pickup || null, updated: r.updated, resultStamp: f.mtime });
     if (r.entries) j.entries = r.entries;
     if (r.link) j.link = r.link;
+    // Namensregel (PC 0.6.1): übersprungene und umbenannte Dateien im Text zeigen
+    const extra = [r.skipped?.length && `${r.skipped.length} schon vorhanden, übersprungen`,
+      r.renamed?.length && (r.renamed.length === 1 ? `gespeichert als „${r.renamed[0].to.split('/').pop()}“` : `${r.renamed.length} umbenannt (… (2))`)].filter(Boolean);
+    if (extra.length) j.message = [j.message, ...extra].filter(Boolean).join(' · ');
     if (r.refresh?.length) refreshAfterJob = true;
     changed = true;
   }

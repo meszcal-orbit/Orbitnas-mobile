@@ -490,3 +490,26 @@ textarea.input { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 /* pCloud-Anmeldung */
 .pairing.login { display: flex; flex-direction: column; gap: 12px; }
 .pairing.login .input { width: 100%; font-size: 16px; }
+
+/* Vorgangsleiste unten (wie am PC 0.6.1): fest, schmal, verschiebt nichts */
+.opsbar { position: fixed; z-index: 9; left: calc(var(--safe-l) + 10px); right: calc(var(--safe-r) + 10px); bottom: calc(var(--tabs-h) + var(--safe-b) + 6px);
+  height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 12px; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 6px 18px rgba(0,0,0,.25); color: var(--text); font: inherit; font-size: 13px; text-align: left; }
+.opsbar[hidden] { display: none; }
+.opsbar .ob-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opsbar .ic { width: 16px; height: 16px; opacity: .7; }
+.opsbar .ob-meter { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: transparent; }
+.opsbar .ob-meter .fill { height: 100%; background: var(--accent); transition: width .4s; }
+html.wide .opsbar { left: auto; right: calc(var(--safe-r) + 20px); bottom: calc(var(--safe-b) + 14px); width: min(420px, 60vw); }
+html.has-ops .view { scroll-padding-bottom: 56px; }
+html.has-ops:not(.wide) .view { padding-bottom: calc(var(--tabs-h) + var(--safe-b) + 60px); }
+html.has-ops.wide .view { padding-bottom: calc(var(--safe-b) + 64px); }
+.obdetails { display: flex; flex-direction: column; gap: 10px; }
+
+/* Sicherheitsfrage, PIN vergessen */
+.secq { display: flex; flex-direction: column; gap: 10px; }
+.secq .input { width: 100%; font-size: 16px; }
+.secq-q { font-weight: 600; font-size: 17px; }
+.link.forgot { margin-top: 14px; }
+.pl-stage img { -webkit-touch-callout: none; user-select: none; }
+.lockscreen ~ .backdrop { z-index: 45; }

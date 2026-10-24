@@ -7,6 +7,7 @@ import { kv, cache, usage, persist } from './db.js';
 import { settings, saveSettings, applyTheme, isStandalone, go } from './ui.js';
 import { THEMES, ACCENTS } from './theme.js';
 import { lock, saveLock, activePin, faceIdAvailable, enrollFaceId, disableFaceId, setOwnPin, checkFaceId } from './lock.js';
+import { securityQuestion, securitySupported, askSecurity, editSecurity } from './secq.js';
 import { openPairing, openLogin } from './pairing.js';
 import { loadLogin } from './login.js';
 import { viaPc, locName, setIgnored } from './locations.js';
@@ -99,7 +100,9 @@ function appearance(view) {
     h('div.label', 'Akzentfarbe'),
     h('div.swatches', ACCENTS.map((c) => h('button.swatch' + ((curAccent || '').toLowerCase() === c.toLowerCase() ? '.on' : ''), { style: { background: c }, 'aria-label': c, onclick: () => pick(curTheme, c) }))),
     h('div.row-input', h('span.label', 'Eigene Farbe:'), custom, h('button.btn', { onclick: () => pick(curTheme, custom.value) }, 'Übernehmen'),
-      h('button.btn', { onclick: () => pick(curTheme, null) }, 'Farbe des Designs')));
+      h('button.btn', { onclick: () => pick(curTheme, null) }, 'Farbe des Designs')),
+    check('Auge „Versteckte zeigen“ anzeigen', 'Blendet den Knopf zum Einblenden versteckter Ordner im Datei-Manager ein oder aus. Ist er aus, bleiben Versteckte immer verborgen.', settings.showEyeButton !== false,
+      (on) => { settings.showEyeButton = on; if (!on) settings.showHidden = false; saveSettings(); toast('Gespeichert'); }));
 }
 
 async function security(view) {
@@ -113,7 +116,7 @@ async function security(view) {
     pcPin ? h('p.muted.small', 'Die PIN wird am PC geändert (Einstellungen → Sicherheit) und kommt automatisch hierher.')
       : h('div.btn-row.left',
         h('button.btn', { onclick: async () => { if (await setOwnPin()) { toast('PIN gespeichert'); renderSettings(view); } } }, lock.ownPin ? 'PIN ändern' : 'PIN festlegen'),
-        lock.ownPin ? h('button.btn.danger', { onclick: async () => { if (await confirmDialog('PIN für dieses Handy entfernen?', { ok: 'Entfernen', danger: true })) { lock.ownPin = null; lock.faceId = null; await saveLock(); renderSettings(view); } } }, 'PIN entfernen') : null),
+        lock.ownPin ? h('button.btn.danger', { onclick: async () => { if (await askSecurity('PIN abschalten') && await confirmDialog('PIN für dieses Handy entfernen?', { ok: 'Entfernen', danger: true })) { lock.ownPin = null; lock.faceId = null; await saveLock(); renderSettings(view); } } }, 'PIN entfernen') : null),
     faceOk ? check('Mit Face ID entsperren', 'iOS speichert dafür einen Passkey „Orbit NAS“ im Schlüsselbund. Die PIN bleibt als Ersatz.', !!lock.faceId, async (on, el) => {
       if (on && !pin) { el.checked = false; toast('Bitte zuerst eine PIN festlegen (als Ersatz, falls Face ID nicht klappt).', 'err'); return; }
       try {
@@ -121,7 +124,15 @@ async function security(view) {
         else { await disableFaceId(); toast('Face ID ausgeschaltet'); }
       } catch (e) { el.checked = false; await disableFaceId(); if (e.name !== 'NotAllowedError') toast(e.message, 'err'); }
     }) : h('p.muted.small', 'Face ID / Touch ID ist auf diesem Gerät nicht verfügbar.'),
-    h('div.row-input', h('span.label', 'Automatisch sperren, wenn die App im Hintergrund war:'), sel));
+    check('24 Stunden entsperrt bleiben', 'Nach dem Entsperren fragt dieses Gerät 24 Stunden lang nicht nach der Programm-PIN. Das Schloss sperrt sofort wieder. Ordner-PINs gelten weiter.', lock.stay24h !== false, async (on) => { lock.stay24h = on; await saveLock(); toast('Gespeichert'); }),
+    h('div.row-input', h('span.label', lock.stay24h !== false ? 'Ohne 24 Stunden: automatisch sperren, wenn die App im Hintergrund war:' : 'Automatisch sperren, wenn die App im Hintergrund war:'), sel),
+    h('h3', 'Sicherheitsfrage'),
+    h('p.muted.small', 'Zusätzliche Sicherung, die du selbst wählst. Gefragt wird sie bei: PIN vergessen, PIN ändern oder abschalten, Handy neu koppeln, Verschlüsselung abschalten. Sie gilt am PC und auf allen Handys.'),
+    securityQuestion() ? h('div.status-line', h('span.dot.ok'), h('span', '„' + securityQuestion().question + '“')) : h('div.status-line', h('span.dot.muted'), h('span', 'Keine Sicherheitsfrage festgelegt')),
+    securitySupported() ? h('div.btn-row.left',
+      h('button.btn', { onclick: async () => { if (await editSecurity()) renderSettings(view); } }, securityQuestion() ? 'Ändern' : 'Festlegen'),
+      securityQuestion() ? h('button.btn.danger', { onclick: async () => { if (await editSecurity({ remove: true })) renderSettings(view); } }, 'Entfernen') : null)
+      : h('p.muted.small', 'Braucht Orbit NAS 0.6.1 am PC.'));
 }
 
 function ignoredCard(view) {
@@ -150,7 +161,7 @@ async function phone(view) {
     state.syncError ? h('p.err-text', state.syncError.message) : null,
     h('div.btn-row.left',
       h('button.btn.primary', { onclick: async () => { try { await sync({ force: true }); toast('Abgeglichen'); renderSettings(view); } catch (e) { toast(e.message, 'err'); } } }, icon('sync'), ' Jetzt abgleichen'),
-      h('button.btn', { onclick: openPairing }, icon('camera'), isDemo() ? ' Mit PC koppeln' : ' Neu koppeln'),
+      h('button.btn', { onclick: async () => { if (isDemo() || await askSecurity('Handy neu koppeln')) openPairing(); } }, icon('camera'), isDemo() ? ' Mit PC koppeln' : ' Neu koppeln'),
       h('button.btn.danger', { onclick: async () => {
         if (!(await confirmDialog('Dieses Gerät entkoppeln? In pCloud und am PC wird nichts gelöscht. Danach kannst du jederzeit neu koppeln.', { ok: 'Entkoppeln', danger: true }))) return;
         await unpair();

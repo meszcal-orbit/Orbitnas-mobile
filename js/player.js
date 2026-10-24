@@ -33,6 +33,18 @@ export function openPlayer(item, items = [item], { onMenu } = {}) {
   document.body.append(root);
   requestAnimationFrame(() => root.classList.add('show'));
 
+  // Medien-Menü wie am PC (Rechtsklick): am Handy langes Drücken auf das Bild bzw. Video
+  const menu = () => { if (!onMenu) return; const it = list[index]; close(); onMenu(it, { fromPlayer: true }); };
+  let pressT = null, px = 0, py = 0;
+  stage.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    px = e.touches[0].clientX; py = e.touches[0].clientY;
+    pressT = setTimeout(() => { pressT = null; navigator.vibrate && navigator.vibrate(15); menu(); }, 550);
+  }, { passive: true });
+  stage.addEventListener('touchmove', (e) => { if (pressT && Math.hypot(e.touches[0].clientX - px, e.touches[0].clientY - py) > 10) { clearTimeout(pressT); pressT = null; } }, { passive: true });
+  stage.addEventListener('touchend', () => { clearTimeout(pressT); pressT = null; });
+  stage.addEventListener('contextmenu', (e) => { e.preventDefault(); menu(); });
+
   function close() {
     savePos();
     clearInterval(saveTimer);

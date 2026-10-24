@@ -216,16 +216,29 @@ export class PCloud {
       : this.api('renamefile', { fileid: item.fileid, toname });
   }
 
-  copy(item, tofolderid) {
+  copy(item, tofolderid, toname) {
+    const n = toname && toname !== item.name ? { toname } : {};
     return item.isFolder
-      ? this.api('copyfolder', { folderid: item.folderid, tofolderid, noover: 1 })
-      : this.api('copyfile', { fileid: item.fileid, tofolderid, noover: 1 });
+      ? this.api('copyfolder', { folderid: item.folderid, tofolderid, noover: 1, ...n })
+      : this.api('copyfile', { fileid: item.fileid, tofolderid, noover: 1, ...n });
   }
 
-  move(item, tofolderid) {
+  move(item, tofolderid, toname) {
+    const n = toname && toname !== item.name ? { toname } : {};
     return item.isFolder
-      ? this.api('renamefolder', { folderid: item.folderid, tofolderid })
-      : this.api('renamefile', { fileid: item.fileid, tofolderid });
+      ? this.api('renamefolder', { folderid: item.folderid, tofolderid, ...n })
+      : this.api('renamefile', { fileid: item.fileid, tofolderid, ...n });
+  }
+
+  /** Prüfsumme einer Datei in pCloud: { algo, hex } (Europa: SHA-256, USA: SHA-1). */
+  async checksum(fileid) {
+    const j = await this.api('checksumfile', { fileid });
+    return j.sha256 ? { algo: 'SHA-256', hex: j.sha256.toLowerCase() } : { algo: 'SHA-1', hex: (j.sha1 || '').toLowerCase() };
+  }
+
+  /** Gleicher Inhalt zweier Dateien in pCloud? */
+  async sameContent(a, b) {
+    try { const [x, y] = await Promise.all([this.checksum(a.fileid), this.checksum(b.fileid)]); return !!x.hex && x.hex === y.hex; } catch { return false; }
   }
 
   remove(item) {

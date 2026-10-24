@@ -5,7 +5,7 @@ import { applyDesign } from './theme.js';
 
 export const settings = {
   designFromPc: true, theme: 'Orbit', accent: null,   // eigenes Design nur, wenn designFromPc = false
-  tileView: false, sort: { by: 'name', dir: 1 }, showHidden: false, lastLocation: null, treeOpen: true, onlyProblems: false,
+  tileView: false, sort: { by: 'name', dir: 1 }, showHidden: false, lastLocation: null, treeOpen: true, onlyProblems: false, showEyeButton: true,
 };
 export async function loadSettings() { Object.assign(settings, (await kv.get('settings')) || {}); }
 export const saveSettings = () => kv.set('settings', JSON.parse(JSON.stringify(settings)));

@@ -4,7 +4,7 @@ import { h, icon, toast, clear } from './util.js';
 import { state, init, sync, onChange, openJobs } from './sync.js';
 import { persist } from './db.js';
 import { loadSettings, route, go, unlocked, isWide, isLandscapeWide, applyTheme } from './ui.js';
-import { loadLock, lock, lockEnabled, showLockScreen } from './lock.js';
+import { loadLock, lock, lockEnabled, showLockScreen, lockImmediately } from './lock.js';
 import { renderFiles } from './files.js';
 import { renderBackup } from './backup.js';
 import { renderLog } from './log.js';
@@ -12,6 +12,7 @@ import { renderSettings } from './settings.js';
 import { renderWelcome, openLogin } from './pairing.js';
 import { isUploading } from './upload.js';
 import { APP_VERSION } from './version.js';
+import { mountOpsBar } from './opsbar.js';
 
 // Dieselben Seiten wie am PC
 const NAV = [
@@ -38,11 +39,12 @@ function shell() {
   const tabs = h('nav.tabs', items('tab'));
   view = h('main.view', { id: 'view' });
   root.append(h('div.shell', rail, view, tabs));
+  mountOpsBar(root);
   navEls = [...root.querySelectorAll('[data-id]')];
   paintSync();
 }
 
-function lockNow() { unlocked.clear(); showLockScreen(); }
+async function lockNow() { unlocked.clear(); await lockImmediately(); showLockScreen({ force: true }); }
 
 function paintSync() {
   const dot = root.querySelector('.sdot');

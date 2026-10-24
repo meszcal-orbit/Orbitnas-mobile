@@ -69,6 +69,17 @@ async function folderInfo(path) {
   return folderCache.get(path);
 }
 
+/** Vergleicht die Datei mit der gleichnamigen in pCloud über die Prüfsumme (wie am PC). Sehr große Dateien: gleiche Größe genügt. */
+async function sameAsInCloud(file, remote) {
+  if (!remote.fileid || !state.backend.checksum || file.size > 300 * 1024 * 1024) return true;
+  try {
+    const { algo, hex } = await state.backend.checksum(remote.fileid);
+    if (!hex) return true;
+    const d = new Uint8Array(await crypto.subtle.digest(algo, await file.arrayBuffer()));
+    return [...d].map((b) => b.toString(16).padStart(2, '0')).join('') === hex;
+  } catch { return true; }
+}
+
 function uniqueName(name, taken) {
   if (!taken.has(name.toLowerCase())) return name;
   const dot = name.lastIndexOf('.');
@@ -113,9 +124,9 @@ async function process(item) {
     }
     const folder = await folderInfo(item.targetPath);
     const same = folder.items.find((x) => !x.isFolder && x.name.toLowerCase() === item.name.toLowerCase());
-    if (same && same.size === item.file.size && !item.force) {
+    if (same && same.size === item.file.size && !item.force && await sameAsInCloud(item.file, same)) {
       item.status = 'übersprungen';
-      item.message = 'Liegt schon in diesem Ordner';
+      item.message = 'Liegt schon in diesem Ordner (gleicher Inhalt)';
       await register(item, item.label);
       return;
     }

@@ -4,7 +4,8 @@
 import { h, icon, kindOf, kindIcon, KIND_COLOR, typeName, fmtSize, fmtDate, toast, sheet, actionSheet, confirmDialog, promptDialog, debounce, norm, clear, uid } from './util.js';
 import { state, isHidden, isIgnored, lockFor, folderStyle, sendJob, pcloudLocationId, basePath, patchStatus, onChange } from './sync.js';
 import { settings, saveSettings, go, filesHash, unlocked, isLandscapeWide, route } from './ui.js';
-import { askPin, choosePin, lockEnabled, showLockScreen } from './lock.js';
+import { askPin, choosePin, lockEnabled, showLockScreen, lockImmediately } from './lock.js';
+import { askSecurity } from './secq.js';
 import {
   ALL, locations, locById, locName, listFolder, fileState, stateText, managedFor, sourcesOf, hiddenItem, ignoredItem, direct, writable,
   newFolder, rename, remove, clipboard, setClipboard, paste, setHidden, setIgnored, setFolderStyle, isFavorite, setFavorite, download, viaPc,
@@ -55,9 +56,9 @@ export async function renderFiles(el, parts) {
     h('div.brand', h('img', { src: 'icons/icon-192.png', alt: '' }), h('span', 'Orbit NAS')),
     h('div.searchbox', icon('search'), searchIn),
     h('div.tbtns',
-      lockEnabled() ? tb('lock', 'Wieder sperren', false, () => { unlocked.clear(); showLockScreen(); }) : null,
+      lockEnabled() ? tb('lock', 'Wieder sperren', false, async () => { unlocked.clear(); await lockImmediately(); showLockScreen({ force: true }); }) : null,
       tb('chart', 'Speicher-Analyse', false, () => analysis(locId, rel)),
-      tb(settings.showHidden ? 'eye' : 'eyeOff', settings.showHidden ? 'Versteckte ausblenden' : 'Versteckte zeigen', settings.showHidden, () => { settings.showHidden = !settings.showHidden; saveSettings(); paint(); paintTree(); }),
+      settings.showEyeButton === false ? null : tb(settings.showHidden ? 'eye' : 'eyeOff', settings.showHidden ? 'Versteckte ausblenden' : 'Versteckte zeigen', settings.showHidden, () => { settings.showHidden = !settings.showHidden; saveSettings(); paint(); paintTree(); }),
       tb('grid', settings.tileView ? 'Als Liste anzeigen' : 'Als Kacheln anzeigen', settings.tileView, () => { settings.tileView = !settings.tileView; saveSettings(); paint(); }),
       tb('sync', 'Aktualisieren', false, () => refresh(true))));
 
@@ -376,11 +377,11 @@ function paintStatus() {
   const items = cur.visible || [];
   const folders = items.filter((x) => x.isFolder).length;
   const up = stats();
-  const pct = up.bytes ? Math.round((up.loaded / up.bytes) * 100) : 0;
   clear(st).append(h('span', `${folders} Ordner, ${items.length - folders} Dateien` + (cur.selecting && cur.selected.size ? ` · ${cur.selected.size} ausgewählt` : '')),
     clipboard.items.length ? h('span.muted', ` · Zwischenablage: ${clipboard.items.length} (${clipboard.cut ? 'ausgeschnitten' : 'kopiert'})`) : null,
     h('span.spacer'),
-    up.total ? h('button.transfers', { onclick: transfersSheet }, icon('upload'), up.active ? ` Hochladen: ${up.done + up.skipped} von ${up.total} · ${pct} %` : ` ${up.done} hochgeladen${up.skipped ? `, ${up.skipped} übersprungen` : ''}${up.failed ? `, ${up.failed} Fehler` : ''}`) : null);
+    // Laufendes Hochladen zeigt die Vorgangsleiste unten; hier nur das Ergebnis, wenn alles fertig ist
+    up.total && !up.active ? h('button.transfers', { onclick: transfersSheet }, icon('upload'), ` ${up.done} hochgeladen${up.skipped ? `, ${up.skipped} übersprungen` : ''}${up.failed ? `, ${up.failed} Fehler` : ''}`) : null);
 }
 
 function paintSelbar() {
@@ -412,7 +413,7 @@ function openItem(it, siblings) {
 
 // ---------------------------------------------------------------- Kontextmenü wie am PC
 
-export function itemMenu(it) {
+export function itemMenu(it, { fromPlayer = false } = {}) {
   const k = kindOf(it.name, it.isFolder);
   const all = !!it.allView;
   const w = !all && writable(it.location, it.rel);
@@ -429,7 +430,7 @@ export function itemMenu(it) {
   const parentRel = it.rel.includes('/') ? it.rel.slice(0, it.rel.lastIndexOf('/')) : '';
   actionSheet(it.name + (it.suffix ? ` (${it.suffix})` : ''), [
     { label: openLabel, icon: it.isFolder ? 'folder' : k === 'video' || k === 'audio' ? 'play' : 'eye', onclick: () => openItem(it, cur.visible) },
-    (cur.search || it.allView) && { label: 'Ordner öffnen, in dem es liegt', icon: 'folder', onclick: () => go(filesHash(it.allView ? ALL : it.location, parentRel)) },
+    (cur.search || it.allView || fromPlayer) && { label: fromPlayer ? 'Im Ordner zeigen' : 'Ordner öffnen, in dem es liegt', icon: 'folder', onclick: () => go(filesHash(it.allView ? ALL : it.location, parentRel)) },
     '-',
     !it.isFolder && { label: 'Herunterladen …', icon: 'download', hint: 'Teilen, „In Dateien sichern“ oder in einer anderen App öffnen', onclick: () => download(it) },
     canShareLink(it) && { label: 'Teilen-Link erstellen …', icon: 'share', hint: 'Öffentlicher Download-Link, z. B. für WhatsApp oder Mail', onclick: () => shareLink(it) },
@@ -468,7 +469,7 @@ function backgroundMenu() {
   actionSheet(locName(cur.loc) + (cur.rel ? ' › ' + cur.rel.split('/').pop() : ''), [
     writable(cur.loc, cur.rel) && clipboard.items.length && { label: 'Einfügen', icon: 'paste', onclick: async () => { if (await paste(cur.loc, cur.rel)) refresh(); } },
     writable(cur.loc, cur.rel) && { label: 'Neuer Ordner', icon: 'plusFolder', onclick: () => askNewFolder(cur.loc, cur.rel) },
-    { label: settings.showHidden ? 'Versteckte ausblenden' : 'Versteckte zeigen', icon: 'eye', onclick: () => { settings.showHidden = !settings.showHidden; saveSettings(); paint(); } },
+    settings.showEyeButton !== false && { label: settings.showHidden ? 'Versteckte ausblenden' : 'Versteckte zeigen', icon: 'eye', onclick: () => { settings.showHidden = !settings.showHidden; saveSettings(); paint(); } },
     { label: settings.tileView ? 'Als Liste anzeigen' : 'Als Kacheln anzeigen', icon: settings.tileView ? 'list' : 'grid', onclick: () => { settings.tileView = !settings.tileView; saveSettings(); paint(); } },
     { label: 'Aktualisieren', icon: 'sync', onclick: () => refresh(true) },
   ]);
@@ -532,6 +533,7 @@ async function unprotect(it) {
   const lk = lockFor(it.location, it.rel);
   if (!lk?.hash) return;
   if (!(await askPin(`PIN für „${it.name}“`, lk.hash, lk.pinLength || 4))) return;
+  if (!(await askSecurity('PIN abschalten'))) return;
   await viaPc('pinEntfernen', { location: it.location, path: it.rel }, `PIN-Schutz von „${it.name}“ entfernen`);
   await patchStatus((st) => { st.locks = (st.locks || []).filter((l) => !(l.location === it.location && l.path.toLowerCase() === it.rel.toLowerCase())); });
   renderFiles(view, ['dateien', cur.loc, cur.rel]);
@@ -695,11 +697,12 @@ function startUpload(files, locId, rel) {
     const inbox = basePath() + '/.mobil/eingang/' + uid();
     addFiles(files, inbox, {
       label,
-      after: (q) => sendJob('verschieben', { from: { location: pcloudLocationId(), path: inbox.replace(/^\/+/, '') + '/' + q.finalName }, to: { location: locId, folder: rel } }, `„${q.finalName}“ nach ${label}`),
+      after: (q) => sendJob('verschieben', { from: { location: pcloudLocationId(), path: inbox.replace(/^\/+/, '') + '/' + q.finalName }, to: { location: locId, folder: rel }, conflict: 'auto' }, `„${q.finalName}“ nach ${label}`),
     });
-    toast('Wird hochgeladen; der PC legt die Dateien dann in den Ordner.');
+    toast('Wird hochgeladen; der PC legt die Dateien dann in den Ordner. Fortschritt unten in der Leiste.');
+    return;
   }
-  transfersSheet();
+  toast('Wird hochgeladen. Fortschritt unten in der Leiste.');
 }
 
 function transfersSheet() {

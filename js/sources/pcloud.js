@@ -2,6 +2,8 @@
 // – für fast alles ein Sitzungs-Schlüssel („auth“), den pCloud nach der Anmeldung ausgibt;
 // – zum Lesen von Dateiinhalten „getzip“ mit Einmal-Anmeldung (Digest), denn getfilelink sperrt pCloud für Web-Apps (Fehler 7010).
 //   Klappt getzip nicht, gibt es einen zweiten Weg über einen kurzzeitigen Freigabe-Link (getpubzip), der danach wieder gelöscht wird.
+// – Lehnt pCloud den Sitzungs-Schlüssel ab (bei manchen Konten „2000 Log in failed“ trotz richtiger Anmeldung),
+//   meldet sich die App bei jeder Anfrage einzeln an (Digest), wie es 2.x beim Lesen schon getan hat.
 
 import { SourceError, offlineError, joinPath, BlobCache, mimeOf, sha1hex, xhr } from './base.js';
 import { firstFileFromZip } from '../unzip.js';
@@ -47,6 +49,7 @@ export class PCloudSource {
     this.pass = secret?.pass || '';
     this.auth = null;
     this.digest = null;
+    this.useDigest = false;   // true: Sitzungs-Schlüssel geht nicht, jede Anfrage einzeln anmelden
     this.blobs = new BlobCache(6);
   }
 
@@ -70,6 +73,15 @@ export class PCloudSource {
     return { username: this.user, digest: this.digest.value, passworddigest };
   }
 
+  /** Frischer Digest nur für diese eine Anfrage. */
+  async _signedFresh() { this.digest = null; return this._signed(); }
+
+  /** Anmelde-Angaben für eine Anfrage: Sitzungs-Schlüssel oder einzeln angemeldet. */
+  async _cred() {
+    if (!this.useDigest && !this.auth) await this.login();
+    return this.useDigest ? this._signedFresh() : { auth: this.auth };
+  }
+
   _url(method, params) { return `https://${this.host}/${method}?${new URLSearchParams(params)}`; }
 
   async login() {
@@ -83,22 +95,35 @@ export class PCloudSource {
       if (j2?.result === 0) { j = j2; this.cfgUpdate = { host: other }; } else { this.host = keep; this.digest = null; }
     }
     if (j.result !== 0) throw perr('userinfo', j.result, j.error);
-    this.auth = j.auth;
+    this.auth = j.auth || null;
+    if (!this.auth) this.useDigest = true;
     this.me = { email: j.email, used: j.usedquota, total: j.quota, key: 'pcloud:' + j.userid };
     return this.me;
   }
 
-  async api(method, params = {}, { body, signal, retried = false } = {}) {
-    if (!this.auth) await this.login();
+  async api(method, params = {}, { body, signal, retried = 0 } = {}) {
+    const cred = await this._cred();
     let res;
     try {
-      res = await fetch(this._url(method, { ...params, auth: this.auth }), body ? { method: 'POST', body, signal } : { signal, cache: 'no-store' });
+      res = await fetch(this._url(method, { ...params, ...cred }), body ? { method: 'POST', body, signal } : { signal, cache: 'no-store' });
     } catch (e) { if (e.name === 'AbortError') throw e; throw offlineError(); }
     if (!res.ok) throw perr(method, 5000, 'HTTP ' + res.status);
     const j = await res.json();
-    if ((j.result === 1000 || j.result === 2000) && !retried) { this.auth = null; return this.api(method, params, { body, signal, retried: true }); }
-    if (j.result !== 0) throw perr(method, j.result, j.error);
+    if ((j.result === 1000 || j.result === 2000) && retried < 2) {
+      // 1. Versuch: neuer Sitzungs-Schlüssel. 2. Versuch: ohne Schlüssel, jede Anfrage einzeln anmelden.
+      if (cred.auth && retried === 0) this.auth = null;
+      else if (!this.useDigest) { this.useDigest = true; this.authFailed = `pCloud ${method}: ${j.result} ${j.error || ''}`.trim(); }
+      else return this._fail(method, j);
+      return this.api(method, params, { body, signal, retried: retried + 1 });
+    }
+    if (j.result !== 0) return this._fail(method, j);
     return j;
+  }
+
+  _fail(method, j) {
+    const e = perr(method, j.result, j.error);
+    if (this.authFailed && e.login) e.detail += ' · vorher ' + this.authFailed;
+    throw e;
   }
 
   async info() {
@@ -166,8 +191,18 @@ export class PCloudSource {
   }
 
   thumbUrl(item, size = 'm') {
-    if (!item.thumb || !item.fileid || !this.auth) return null;
-    return this._url('getthumb', { fileid: item.fileid, size: size === 'l' ? '1024x1024' : '256x256', crop: size === 'l' ? 0 : 1, auth: this.auth });
+    if (!item.thumb || !item.fileid) return null;
+    const params = { fileid: item.fileid, size: size === 'l' ? '1024x1024' : '256x256', crop: size === 'l' ? 0 : 1 };
+    if (!this.useDigest && this.auth) return this._url('getthumb', { ...params, auth: this.auth });
+    if (!this.useDigest) return null;
+    // Ohne Sitzungs-Schlüssel: Vorschaubild einzeln angemeldet holen und als lokale Adresse zeigen
+    const k = 'thumb:' + size + ':' + item.fileid;
+    if (this.blobs.get(k)) return this.blobs.get(k);
+    return (async () => {
+      const res = await fetch(this._url('getthumb', { ...params, ...(await this._signedFresh()) }));
+      if (!res.ok || (res.headers.get('content-type') || '').includes('json')) return null;
+      return this.blobs.get(k) || this.blobs.set(k, URL.createObjectURL(await res.blob()));
+    })().catch(() => null);
   }
 
   async checksum(item) {
@@ -226,11 +261,10 @@ export class PCloudSource {
 
   /** Hochladen; große Dateien in Teilen (bei Abbruch geht es an der Stelle weiter, state wird fortgeschrieben). */
   async upload(file, folder, name, { onProgress, signal, state = {} } = {}) {
-    if (!this.auth) await this.login();
     const CHUNK = 8 * 1024 * 1024;
     const folderid = state.folderid ?? (state.folderid = await this._folderid(folder));
     const call = async (method, params, body, base = 0) => {
-      const r = await xhr('POST', this._url(method, { ...params, auth: this.auth }), body, { signal, onProgress: (n) => onProgress && onProgress(base + n) });
+      const r = await xhr('POST', this._url(method, { ...params, ...(await this._cred()) }), body, { signal, onProgress: (n) => onProgress && onProgress(base + n) });
       const j = r.body;
       if (r.status !== 200 || !j) throw perr(method, 5000, 'HTTP ' + r.status);
       if (j.result !== 0) throw perr(method, j.result, j.error);

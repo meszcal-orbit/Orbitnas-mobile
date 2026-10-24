@@ -1,4 +1,8 @@
 // Direkter Zugriff auf pCloud (offizielle API, nur HTTPS). Der Zugang (Token) kommt beim Koppeln vom PC.
+// Lesen von Dateiinhalten erlaubt pCloud Web-Apps nur mit E-Mail und Passwort („getzip“ mit Digest),
+// nicht mit dem Token und nicht über getfilelink (Fehler 7010 „Invalid link referer“).
+
+import { firstFileFromZip } from './unzip.js';
 
 const MESSAGES = {
   1000: 'Die Kopplung mit pCloud ist ungültig. Bitte am PC neu koppeln.',
@@ -24,6 +28,25 @@ export class ApiError extends Error {
     this.notFound = code === 2005 || code === 2009;
   }
 }
+export class LoginError extends Error {
+  constructor(message) { super(message || 'Bitte bei pCloud anmelden (Einstellungen → pCloud-Anmeldung).'); this.code = 'LOGIN'; this.login = true; }
+}
+const LOGIN_MESSAGES = {
+  2000: 'E-Mail oder Passwort von pCloud stimmt nicht.',
+  2297: 'Bei pCloud ist die Zwei-Faktor-Anmeldung an. Das kann die App noch nicht. Bitte Claude Bescheid geben, dann wird es nachgerüstet.',
+  4000: 'Zu viele Anmeldeversuche. Bitte ein paar Minuten warten.',
+};
+
+async function sha1hex(text) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text)));
+  return [...d].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', flac: 'audio/flac',
+  pdf: 'application/pdf', txt: 'text/plain', html: 'text/html', json: 'application/json', csv: 'text/csv' };
+const mimeOf = (name = '') => MIME[(name.split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
+
 export class OfflineError extends Error {
   constructor() { super('Keine Internetverbindung.'); this.offline = true; }
 }
@@ -45,9 +68,66 @@ function toItem(m, parentPath) {
 }
 
 export class PCloud {
-  constructor({ host, token }) {
+  constructor({ host, token, login }) {
     this.host = host || 'api.pcloud.com';
     this.token = token;
+    this.login = login || null;
+    this.blobs = new Map();
+  }
+
+  setLogin(login) { this.login = login || null; }
+
+  // ---------------------------------------------------------------- Anmeldung mit E-Mail und Passwort (nur fürs Lesen)
+
+  async _getJson(url) {
+    let res;
+    try { res = await fetch(url, { cache: 'no-store' }); } catch { throw new OfflineError(); }
+    if (!res.ok) throw new ApiError(5000, 'HTTP ' + res.status);
+    return res.json();
+  }
+
+  /** Frische Anmelde-Angaben für genau eine Anfrage (Digest gilt bei pCloud nur kurz). */
+  async _signed(login = this.login) {
+    if (!login) throw new LoginError();
+    const d = await this._getJson(`https://${this.host}/getdigest`);
+    if (d.result !== 0) throw new ApiError(d.result, d.error);
+    const passworddigest = await sha1hex(login.pass + await sha1hex(login.user.toLowerCase()) + d.digest);
+    return { username: login.user, digest: d.digest, passworddigest };
+  }
+
+  _signedUrl(method, params, auth) {
+    return `https://${this.host}/${method}?${new URLSearchParams({ ...params, ...auth })}`;
+  }
+
+  /** Prüft E-Mail und Passwort. Liefert die E-Mail des Kontos. */
+  async checkLogin(login) {
+    const j = await this._getJson(this._signedUrl('userinfo', {}, await this._signed(login)));
+    if (j.result !== 0) throw new LoginError(LOGIN_MESSAGES[j.result] || ('pCloud-Anmeldung abgelehnt: ' + (j.error || j.result)));
+    return j.email;
+  }
+
+  /** Inhalt einer Datei als Bytes (über getzip). */
+  async _bytes(item) {
+    let fileid = item.fileid;
+    if (!fileid) fileid = (await this.api('stat', { path: item.path })).metadata.fileid;
+    const url = this._signedUrl('getzip', { fileids: fileid, filename: 'datei.zip' }, await this._signed());
+    let res;
+    try { res = await fetch(url, { cache: 'no-store' }); } catch { throw new OfflineError(); }
+    if (!res.ok) throw new ApiError(5000, 'HTTP ' + res.status);
+    if ((res.headers.get('content-type') || '').includes('json')) {
+      const j = await res.json();
+      if (j.result === 2000) throw new LoginError(LOGIN_MESSAGES[2000] + ' Bitte unter Einstellungen → pCloud-Anmeldung neu eingeben.');
+      if (LOGIN_MESSAGES[j.result]) throw new LoginError(LOGIN_MESSAGES[j.result]);
+      throw new ApiError(j.result, j.error);
+    }
+    return firstFileFromZip(new Uint8Array(await res.arrayBuffer()));
+  }
+
+  /** Vorschaubild über die Anmeldung, falls pCloud es mit dem Token nicht ausliefert. */
+  async thumbBlobUrl(fileid, size = '256x256') {
+    const res = await fetch(this._signedUrl('getthumb', { fileid, size, crop: 1 }, await this._signed()), { cache: 'force-cache' });
+    if (!res.ok || (res.headers.get('content-type') || '').includes('json')) throw new Error('kein Vorschaubild');
+    return URL.createObjectURL(await res.blob());
   }
 
   url(method, params = {}) {
@@ -99,9 +179,20 @@ export class PCloud {
     return this.url('getthumb', { fileid, size, crop: 1 });
   }
 
+  /** Adresse zum Ansehen/Abspielen: die Datei wird ganz geladen und als lokale Adresse (blob:) bereitgestellt. */
   async fileLink(item) {
-    const j = await this.api('getfilelink', item.fileid ? { fileid: item.fileid } : { path: item.path });
-    return 'https://' + j.hosts[0] + j.path;
+    const id = item.fileid || item.path;
+    if (this.blobs.has(id)) return this.blobs.get(id);
+    const bytes = await this._bytes(item);
+    const url = URL.createObjectURL(new Blob([bytes], { type: item.contenttype || mimeOf(item.name || item.path) }));
+    this.blobs.set(id, url);
+    // Nur die letzten Dateien im Speicher behalten
+    while (this.blobs.size > 6) {
+      const [k, u] = this.blobs.entries().next().value;
+      this.blobs.delete(k);
+      setTimeout(() => URL.revokeObjectURL(u), 60000);
+    }
+    return url;
   }
 
   async mkdir(path) {
@@ -143,18 +234,9 @@ export class PCloud {
 
   /** Liest eine Datei als Bytes, oder null, wenn es sie nicht gibt. */
   async readFile(path) {
-    let link;
-    try {
-      const j = await this.api('getfilelink', { path });
-      link = 'https://' + j.hosts[0] + j.path;
-    } catch (e) {
-      if (e.notFound) return null;
-      throw e;
-    }
-    let res;
-    try { res = await fetch(link, { cache: 'no-store' }); } catch { throw new OfflineError(); }
-    if (!res.ok) throw new ApiError(5000, 'HTTP ' + res.status);
-    return new Uint8Array(await res.arrayBuffer());
+    let meta;
+    try { meta = (await this.api('stat', { path })).metadata; } catch (e) { if (e.notFound) return null; throw e; }
+    return this._bytes({ fileid: meta.fileid, path });
   }
 
   async writeFile(folderPath, name, bytes) {

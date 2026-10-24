@@ -7,7 +7,8 @@ import { kv, cache, usage, persist } from './db.js';
 import { settings, saveSettings, applyTheme, isStandalone, go } from './ui.js';
 import { THEMES, ACCENTS } from './theme.js';
 import { lock, saveLock, activePin, faceIdAvailable, enrollFaceId, disableFaceId, setOwnPin, checkFaceId } from './lock.js';
-import { openPairing } from './pairing.js';
+import { openPairing, openLogin } from './pairing.js';
+import { loadLogin } from './login.js';
 import { viaPc, locName, setIgnored } from './locations.js';
 import { APP_VERSION } from './version.js';
 
@@ -136,11 +137,14 @@ async function phone(view) {
   const p = state.pairing;
   const box = card('Handy (iPhone und iPad)', 'Dieses Gerät ist mit Orbit NAS am PC gekoppelt. Alles, was zwischen PC und Handy ausgetauscht wird, ist Ende-zu-Ende verschlüsselt.');
   const acc = h('span', '…');
+  const login = isDemo() ? null : await loadLogin();
   box.append(
     kvRow('Gekoppelt mit', p.pc + (isDemo() ? ' (Beispiel)' : '')),
     kvRow('Seit', fmtDate(p.paired)),
     kvRow('Dieses Gerät', deviceName()),
     kvRow('pCloud-Konto', acc),
+    isDemo() ? null : kvRow('pCloud-Anmeldung', login ? h('span', login.user, ' ', h('button.link', { onclick: async () => { if (await openLogin({ reason: 'Neue Anmeldung bei pCloud, zum Beispiel nach einer Passwortänderung.' })) renderSettings(view); } }, 'Ändern'))
+      : h('button.btn.small.primary', { onclick: async () => { if (await openLogin()) { sync({ force: true }).catch(() => {}); renderSettings(view); } } }, 'Jetzt anmelden')),
     kvRow('Letzter Abgleich', state.lastSync ? fmtAgo(state.lastSync) : 'noch nie'),
     kvRow('Daten vom PC', state.status ? fmtAgo(state.status.generated) : 'noch keine'),
     state.syncError ? h('p.err-text', state.syncError.message) : null,

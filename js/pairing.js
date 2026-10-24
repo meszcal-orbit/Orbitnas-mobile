@@ -1,7 +1,7 @@
 // Willkommen (noch nicht gekoppelt) und Koppeln mit dem PC per QR-Code.
 
 import { h, icon, toast, sheet, loadScript, clear } from './util.js';
-import { pair, parsePairing, startDemo } from './sync.js';
+import { pair, parsePairing, startDemo, setPcloudLogin } from './sync.js';
 import { go, isStandalone } from './ui.js';
 
 // ---------------------------------------------------------------- Willkommen (noch nicht gekoppelt)
@@ -49,17 +49,24 @@ export function openPairing() {
     let p;
     try { p = parsePairing(text); } catch (e) { status.textContent = e.message; status.className = 'err-text center'; return; }
     stop();
-    status.className = 'muted center';
-    status.textContent = 'Verbinde mit pCloud …';
-    try {
-      await pair(p);
-      s.close();
-      toast('Gekoppelt mit ' + p.pc);
-      go('#/dateien');
-    } catch (e) {
-      status.className = 'err-text center';
-      status.textContent = e.code === 'KEY' ? e.message : 'Koppeln hat nicht geklappt: ' + e.message;
-    }
+    // Schritt 2: pCloud-Anmeldung (pCloud erlaubt Web-Apps das Lesen von Dateien nur damit)
+    clear(body).append(loginForm({
+      intro: `Code von „${p.pc}“ erkannt. Jetzt noch einmal bei pCloud anmelden, mit demselben Konto wie am PC.`,
+      button: 'Anmelden und koppeln',
+      async submit(login, st) {
+        st.className = 'muted center';
+        st.textContent = 'Verbinde mit pCloud …';
+        try {
+          await pair(p, login);
+          s.close();
+          toast('Gekoppelt mit ' + p.pc);
+          go('#/dateien');
+        } catch (e) {
+          st.className = 'err-text center';
+          st.textContent = e.code === 'KEY' || e.code === 'LOGIN' ? e.message : 'Koppeln hat nicht geklappt: ' + e.message;
+        }
+      },
+    }));
   }
 
   fileInput.onchange = async () => {
@@ -108,4 +115,45 @@ export function openPairing() {
         : 'Kamera nicht verfügbar. Bitte ein Foto des QR-Codes wählen.';
     }
   })();
+}
+
+// ---------------------------------------------------------------- pCloud-Anmeldung (E-Mail und Passwort)
+
+function loginForm({ intro, button, submit }) {
+  const user = h('input.input', { type: 'email', placeholder: 'E-Mail bei pCloud', autocomplete: 'username', autocapitalize: 'off', autocorrect: 'off', spellcheck: false });
+  const pass = h('input.input', { type: 'password', placeholder: 'Passwort bei pCloud', autocomplete: 'current-password' });
+  const st = h('p.muted.center', '');
+  const go_ = () => {
+    if (!user.value.trim() || !pass.value) { st.className = 'err-text center'; st.textContent = 'Bitte E-Mail und Passwort eingeben.'; return; }
+    submit({ user: user.value.trim(), pass: pass.value }, st);
+  };
+  pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') go_(); });
+  return h('form.pairing.login', { onsubmit: (e) => { e.preventDefault(); go_(); } },
+    h('p', intro),
+    h('p.muted.small', 'Warum? pCloud lässt Apps im Browser Dateien nur mit deiner Anmeldung öffnen. Das Passwort bleibt verschlüsselt nur auf diesem Gerät und geht nur direkt an pCloud.'),
+    user, pass,
+    h('button.btn.primary.block', { type: 'submit' }, button),
+    st);
+}
+
+/** Anmeldung nachholen oder ändern (Einstellungen, oder wenn sie fehlt). */
+export function openLogin({ reason } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const s = sheet(loginForm({
+      intro: reason || 'Mit deinem pCloud-Konto anmelden (dasselbe wie am PC).',
+      button: 'Anmelden',
+      async submit(login, st) {
+        st.className = 'muted center';
+        st.textContent = 'Prüfe Anmeldung …';
+        try {
+          await setPcloudLogin(login);
+          done = true;
+          s.close();
+          toast('Bei pCloud angemeldet');
+          resolve(true);
+        } catch (e) { st.className = 'err-text center'; st.textContent = e.message; }
+      },
+    }), { title: 'pCloud-Anmeldung', onClose: () => { if (!done) resolve(false); } });
+  });
 }

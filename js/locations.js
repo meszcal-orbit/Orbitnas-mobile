@@ -3,7 +3,7 @@
 
 import { state, isProtectedPcloud, isHidden, isIgnored, lockFor, managedFolderFor, sendJob, awaitJob, pcloudLocationId, basePath, patchStatus, isDemo } from './sync.js';
 import { cache } from './db.js';
-import { fmtSize, toast, confirmDialog, shareOrDownload } from './util.js';
+import { h, fmtSize, toast, confirmDialog, shareOrDownload } from './util.js';
 
 export const ALL = 'alle';
 
@@ -419,4 +419,15 @@ export async function shareLink(it) {
   if (!link) { toast(j?.message || 'Kein Link erhalten. Läuft Orbit NAS am PC?', 'err'); return; }
   try { if (navigator.share) { await navigator.share({ title: m.name, url: link }); return; } } catch (e) { if (e.name === 'AbortError') return; }
   try { await navigator.clipboard.writeText(link); toast('Link kopiert'); } catch { toast(link); }
+}
+
+/** Vorschaubild aus pCloud. Liefert pCloud es nicht mit dem Zugang vom PC, wird es mit der Anmeldung geholt. */
+export function thumbImg(sel, fileid, size, alt = '') {
+  const img = h(sel, { src: state.backend.thumbUrl(fileid, size), loading: 'lazy', alt });
+  img.addEventListener('error', () => {
+    if (img.dataset.tried || !state.backend.thumbBlobUrl) { img.style.visibility = 'hidden'; return; }
+    img.dataset.tried = '1';
+    state.backend.thumbBlobUrl(fileid, size).then((u) => { img.src = u; }).catch(() => { img.style.visibility = 'hidden'; });
+  });
+  return img;
 }

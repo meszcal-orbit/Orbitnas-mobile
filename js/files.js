@@ -9,6 +9,7 @@ import {
   ALL, locations, locById, locName, listFolder, fileState, stateText, managedFor, sourcesOf, hiddenItem, ignoredItem, direct, writable,
   newFolder, rename, remove, clipboard, setClipboard, paste, setHidden, setIgnored, setFolderStyle, isFavorite, setFavorite, download, viaPc,
   readOnlyFor, setReadOnly, canShareLink, shareLink,
+  thumbImg,
 } from './locations.js';
 import { backupNow, offload, restore, folderDialog, addConnectionInfo } from './backup.js';
 import { openPlayer } from './player.js';
@@ -358,7 +359,7 @@ function row(it) {
 }
 
 function tile(it) {
-  const thumb = it.kind === 'pcloud' && it.thumb && !it.isFolder ? h('img.tthumb', { src: state.backend.thumbUrl(it.fileid, '256x256'), loading: 'lazy', alt: '' }) : null;
+  const thumb = it.kind === 'pcloud' && it.thumb && !it.isFolder ? thumbImg('img.tthumb', it.fileid, '256x256') : null;
   const el = h('div.tile', { tabindex: 0, role: 'button' },
     cur.selecting ? h('span.check' + (cur.selected.has(it) ? '.on' : ''), icon('check')) : null,
     h('span.tstate', stateGlyph(it)),

@@ -9,7 +9,8 @@ import { renderFiles } from './files.js';
 import { renderBackup } from './backup.js';
 import { renderLog } from './log.js';
 import { renderSettings } from './settings.js';
-import { renderWelcome } from './pairing.js';
+import { renderWelcome, openLogin } from './pairing.js';
+import { hasLogin } from './login.js';
 import { isUploading } from './upload.js';
 import { APP_VERSION } from './version.js';
 
@@ -80,9 +81,15 @@ async function render() {
 // ---------------------------------------------------------------- Abgleich im Hintergrund
 
 let timer = null;
+let loginAsked = false;
 async function backgroundSync(force = false) {
   if (!state.pairing || document.visibilityState !== 'visible') return;
-  try { await sync({ force }); } catch { /* wird angezeigt */ }
+  try { await sync({ force }); } catch (e) {
+    if (e && e.code === 'LOGIN' && !loginAsked && !document.querySelector('.backdrop')) {
+      loginAsked = true;
+      if (await openLogin({ reason: e.message })) backgroundSync(true);
+    }
+  }
 }
 function schedule() {
   clearTimeout(timer);
@@ -175,5 +182,7 @@ window.addEventListener('orientationchange', () => setTimeout(layout, 300));
   if (paired && lockEnabled()) await showLockScreen();
   if (!location.hash || /^#\/(start|suche|hochladen|mehr)/.test(location.hash)) history.replaceState(null, '', '#/dateien');
   await render();
+  // Ab 2.2 braucht das Lesen von Dateien die pCloud-Anmeldung (pCloud-Vorgabe für Web-Apps)
+  if (paired && !state.pairing.demo && !(await hasLogin())) await openLogin({ reason: 'Neu in dieser Version: pCloud lässt die App Dateien nur mit deiner Anmeldung öffnen. Bitte einmal mit demselben Konto wie am PC anmelden.' });
   if (paired) { backgroundSync(true); schedule(); }
 })();

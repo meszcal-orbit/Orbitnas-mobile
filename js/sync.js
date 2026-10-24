@@ -2,6 +2,7 @@
 
 import { kv, cache } from './db.js';
 import { PCloud } from './pcloud.js';
+import { loadLogin, saveLogin, clearLogin } from './login.js';
 import { DemoBackend, demoStatus, demoIndex, demoLog, demoListe, DEMO_PAIRING } from './demo.js';
 import { encryptOnm, decryptOnm, b64urlToBytes } from './crypto.js';
 import { uid } from './util.js';
@@ -122,6 +123,7 @@ export async function init() {
   state.jobs = (await kv.get('jobs')) || [];
   if (!state.pairing) return false;
   makeBackend();
+  if (!isDemo()) state.backend.setLogin(await loadLogin());
   if (isDemo()) {
     state.status = (await cache.get('demoStatus')) || demoStatus();
     setIndex(demoIndex());
@@ -152,14 +154,37 @@ export function parsePairing(text) {
   return { v: 1, pc: p.pc || 'PC', conn: p.conn || 'pcloud', host: p.host || 'api.pcloud.com', token: p.token, base: p.base, key: p.key, paired: new Date().toISOString() };
 }
 
-export async function pair(pairing) {
+export async function pair(pairing, login) {
   state.pairing = pairing;
   makeBackend();
-  // Zugang prüfen, bevor gespeichert wird.
-  await state.backend.userinfo();
+  // Zugang prüfen, bevor gespeichert wird: Token vom PC und Anmeldung müssen zum selben pCloud-Konto gehören.
+  try {
+    const info = await state.backend.userinfo();
+    await checkSameAccount(login, info.email);
+  } catch (e) { state.pairing = null; state.backend = null; throw e; }
+  state.backend.setLogin(login);
+  await saveLogin(login.user, login.pass);
   await kv.set('pairing', pairing);
   await sync({ force: true });
   emit('pairing');
+}
+
+async function checkSameAccount(login, tokenEmail) {
+  const email = await state.backend.checkLogin(login);
+  if (tokenEmail && email && tokenEmail.toLowerCase() !== email.toLowerCase()) {
+    const e = new Error(`Das ist ein anderes pCloud-Konto als am PC (${tokenEmail}). Bitte mit diesem Konto anmelden.`);
+    e.code = 'LOGIN';
+    throw e;
+  }
+}
+
+/** pCloud-Anmeldung ändern (Einstellungen oder wenn sie fehlt). */
+export async function setPcloudLogin(login) {
+  const info = await state.backend.userinfo();
+  await checkSameAccount(login, info.email);
+  await saveLogin(login.user, login.pass);
+  state.backend.setLogin(login);
+  emit('pairing-login');
 }
 
 export async function startDemo() {
@@ -173,6 +198,7 @@ export async function startDemo() {
 export async function unpair() {
   await kv.del('pairing');
   await kv.del('lastSync');
+  await clearLogin();
   await cache.clear();
   state.pairing = null;
   state.backend = null;

@@ -3,7 +3,7 @@
 import { h, icon, kindOf, kindIcon, KIND_COLOR, fmtSize, fmtDate, toast, clear } from './util.js';
 import { state, isDemo } from './sync.js';
 import { kv } from './db.js';
-import { linkFor, fetchViaPc, download, locName } from './locations.js';
+import { linkFor, fetchViaPc, download, locName, thumbImg } from './locations.js';
 
 const playable = (k) => k === 'video' || k === 'audio';
 const sameGroup = (a, b) => a === b || (playable(a) && playable(b));
@@ -144,7 +144,7 @@ export function openPlayer(item, items = [item], { onMenu } = {}) {
     if (list.length < 2) return;
     clear(side).append(...list.map((x, i) => {
       const kx = kindOf(x.name);
-      const thumb = x.kind === 'pcloud' && x.thumb ? h('img', { src: state.backend.thumbUrl(x.fileid, '120x120'), loading: 'lazy', alt: '' }) : h('span.pl-glyph', { style: { color: KIND_COLOR[kx] } }, icon(kindIcon[kx]));
+      const thumb = x.kind === 'pcloud' && x.thumb ? thumbImg('img', x.fileid, '120x120') : h('span.pl-glyph', { style: { color: KIND_COLOR[kx] } }, icon(kindIcon[kx]));
       return h('button.pl-item' + (i === index ? '.on' : ''), { onclick: () => show(i) }, h('span.pl-thumb', thumb), h('span.pl-name', x.name, h('small', fmtSize(x.size))));
     }));
     side.querySelector('.on')?.scrollIntoView({ block: 'nearest' });

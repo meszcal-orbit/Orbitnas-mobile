@@ -8,7 +8,7 @@ import { loadLock, lockEnabled, showLockScreen, lockImmediately } from './lock.j
 import { loadConnections, connections, onConnections, source, addConnection } from './sources/registry.js';
 import { initStore, syncStore, onStore, autoLockMinutes } from './store.js';
 import { handleRedirect } from './sources/oauth.js';
-import { renderBrowse, renderFolder, renderRecent, renderFavorites, renderSearchAll } from './files.js';
+import { renderBrowse, renderFolder, renderRecent, renderFavorites, renderSearchAll, renderAll, allHash } from './files.js';
 import { renderSettings } from './settings.js';
 import { renderFritz } from './fritz.js';
 import { openAddCloud, finishOAuth } from './addcloud.js';
@@ -49,6 +49,7 @@ function paintSide() {
     h('div.side-head', h('img', { src: 'icons/icon-192.png', alt: '' }), h('b', 'Orbit NAS'), lockEnabled() ? h('button.nav-btn', { 'aria-label': 'Sperren', onclick: lockNow }, icon('lock')) : null),
     item('zuletzt', 'Zuletzt', 'clock', '#/zuletzt'),
     h('div.side-title', 'Orte'),
+    connections().filter((c) => c.type !== 'demo').length > 1 ? item('alle', 'Alle Quellen', 'layers', allHash(), 'var(--accent)') : null,
     ...connections().map((c) => item('d:' + c.id, c.name, c.type === 'demo' ? 'layers' : 'cloud', dirHash(c.id), srcColor(c.id))),
     item('fritz', 'FRITZ!NAS', 'disk', '#/fritz', '#E2001A'),
     h('button.sitem.add', { onclick: () => openAddCloud() }, icon('plus'), h('span', 'Cloud hinzufügen')),
@@ -83,13 +84,14 @@ async function render() {
   if (!view || !document.body.contains(view)) shell();
   const { parts, query } = route();
   const page = parts[0] || 'orte';
-  const tab = page === 'd' || page === 'suche' || page === 'fritz' ? 'orte' : page;
+  const tab = ['d', 'suche', 'fritz', 'alle'].includes(page) ? 'orte' : page;
   root.querySelectorAll('[data-tab]').forEach((el) => el.classList.toggle('on', el.dataset.tab === tab));
   document.documentElement.dataset.page = page;
   paintSide();
   const my = ++rendering;
   try {
     if (page === 'd') await renderFolder(view, parts[1], parts[2] ? '/' + parts[2] : '/');
+    else if (page === 'alle') await renderAll(view, parts[1] ? '/' + parts[1] : '/');
     else if (page === 'orte') { view.scrollTop = 0; await renderBrowse(view); }
     else if (page === 'zuletzt') { view.scrollTop = 0; await renderRecent(view); }
     else if (page === 'favoriten') { view.scrollTop = 0; await renderFavorites(view); }
@@ -199,7 +201,7 @@ function movedNotice() {
   try { oauth = await handleRedirect(); } catch (e) { oauth = { error: e.message + (e.detail ? ` (${e.detail})` : '') }; }
   document.getElementById('splash')?.remove();
   if (connections().length && lockEnabled()) await showLockScreen();
-  if (!location.hash || !/^#\/(orte|d|zuletzt|favoriten|einstellungen|suche|fritz)/.test(location.hash)) history.replaceState(null, '', '#/orte');
+  if (!location.hash || !/^#\/(orte|d|alle|zuletzt|favoriten|einstellungen|suche|fritz)/.test(location.hash)) history.replaceState(null, '', '#/orte');
   await render();
   if (oauth) await finishOAuth(oauth);
   if (connections().length) {

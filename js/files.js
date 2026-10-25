@@ -11,7 +11,7 @@ import { askSecurity } from './secq.js';
 import {
   keyOf, connName, srcColor, isEncrypted, isHidden, readOnlyFor, lockFor, isUnlocked, markUnlocked, folderStyle, isFavorite, writable, visible,
   cachedList, listFolder, glyph, thumbOrGlyph, recent, newFolder, rename, remove, paste, download, shareLink, errText,
-  setHidden, setIgnored, setReadOnly, setFavorite, setFolderStyle, setLock, favorites, FOLDER_ICON, FOLDER_COLORS,
+  setHidden, setIgnored, setReadOnly, setFavorite, setFolderStyle, setLock, favorites, FOLDER_ICON, FOLDER_COLORS, folderIcon,
 } from './fileops.js';
 import { openPlayer } from './player.js';
 import { pickFolder } from './picker.js';
@@ -83,7 +83,10 @@ export async function renderBrowse(el) {
     return row;
   });
   const fritz = await fritzConfigured();
-  page.append(group('Orte', ...rows,
+  const real = conns.filter((c) => c.type !== 'demo');
+  const allRow = real.length > 1 ? h('button.row', { onclick: () => go(allHash()) }, h('span.srcicon', { style: { background: 'var(--accent)' } }, icon('layers')),
+    h('span.row-main', h('span.row-title', 'Alle Quellen'), h('small.row-sub', 'Gleiche Ordner aus allen Clouds zusammen')), icon('chevron', 'chev')) : null;
+  page.append(group('Orte', allRow, ...rows,
     h('button.row', { onclick: () => openFritz() }, h('span.srcicon', { style: { background: '#E2001A' } }, icon('disk')),
       h('span.row-main', h('span.row-title', 'FRITZ!NAS'), h('small.row-sub', fritz ? 'Über die App „Dateien“ (im WLAN zu Hause)' : 'Einrichten – Anleitung antippen')), icon('chevron', 'chev')),
     h('button.row.add', { onclick: () => openAddCloud() }, h('span.srcicon.plain', icon('plus')), h('span.row-main', h('span.row-title', 'Cloud hinzufügen')))));
@@ -185,6 +188,61 @@ export async function renderFolder(el, connId, path) {
   }
 }
 
+// ---------------------------------------------------------------- Alle Quellen (gleiche Ordner aus allen Clouds zusammen)
+
+export const allHash = (path = '/') => '#/alle' + (path && path !== '/' ? '/' + encodeURIComponent(path.replace(/^\/+/, '')) : '');
+
+export async function renderAll(el, path) {
+  view = el;
+  const changed = cur.conn !== 'alle' || cur.path.toLowerCase() !== path.toLowerCase();
+  if (changed) cur = { conn: 'alle', path, items: [], shown: [], filter: '', search: null, selecting: false, selected: new Set() };
+  const name = path === '/' ? 'Alle Quellen' : baseName(path);
+  const page = h('div.page.ios');
+  clear(view).append(page);
+  if (changed) view.scrollTop = 0;
+  const back = path === '/' ? { label: 'Orte', onclick: () => go('#/orte') } : { label: parentPath(path) === '/' ? 'Alle Quellen' : baseName(parentPath(path)), onclick: () => go(allHash(parentPath(path))) };
+  page.append(...pageHead({ title: name, back, right: [navBtn(settings.tileView ? 'list' : 'grid', settings.tileView ? 'Als Liste' : 'Als Symbole', () => { settings.tileView = !settings.tileView; saveSettings(); renderAll(view, path); })] }),
+    searchField('Suchen in „' + name + '“', cur.filter, (v) => { cur.filter = v; paint(); }, null));
+  const notices = h('div.notices');
+  const listBox = h('div.listbox');
+  page.append(notices, listBox);
+  const conns = connections().filter((c) => c.type !== 'demo');
+  const use = conns.length ? conns : connections();
+  if (!cur.items.length) listBox.append(h('div.loading', h('div.spinner'), 'Lädt …'));
+  const skipped = [];
+  const lists = await Promise.all(use.map(async (c) => {
+    if (isEncrypted(path)) return [];
+    const lk = lockFor(c.id, path);
+    if (lk && !isUnlocked(c.id, lk)) { skipped.push(c.name + ' (PIN)'); return []; }
+    try { return visible(c.id, await listFolder(c.id, path)); }
+    catch (e) { if (!e.notFound) skipped.push(c.name + (e.offline ? ' (offline)' : '')); return []; }
+  }));
+  if (cur.conn !== 'alle' || cur.path !== path) return;
+  const folders = new Map();
+  const files = [];
+  lists.flat().forEach((it) => {
+    if (!it.isFolder) { files.push(it); return; }
+    const k = it.name.toLowerCase();
+    const f = folders.get(k) || { ...it, merged: true, conns: [], style: null, mtime: 0 };
+    f.conns.push(it.conn);
+    f.mtime = Math.max(f.mtime, it.mtime || 0);
+    if (!f.style) { const st = folderStyle(it.conn, it.path); if (st) { f.style = st; f.conn = it.conn; } }
+    folders.set(k, f);
+  });
+  cur.items = [...folders.values(), ...files];
+  if (skipped.length) clear(notices).append(h('div.notice.soft', icon('cloud'), 'Nicht dabei: ' + skipped.join(', ')));
+  paint();
+}
+
+function mergedMenu(it) {
+  actionSheet(it.name, [
+    { label: 'Öffnen', icon: 'folder', onclick: () => go(allHash(it.path)) },
+    ...it.conns.map((id) => ({ label: 'In „' + connName(id) + '“ öffnen', icon: 'cloud', onclick: () => go(dirHash(id, it.path)) })),
+    '-',
+    !isEncrypted(it.path) && { label: 'Farbe und Symbol …', icon: 'palette', hint: 'Gilt in allen Clouds mit diesem Ordner', onclick: () => styleDialog(it) },
+  ]);
+}
+
 function sorted(items) {
   const { by, dir } = settings.sort;
   const cmp = {
@@ -225,8 +283,9 @@ function itemHandlers(it, el) {
     if (cur.selecting) { cur.selected.has(it) ? cur.selected.delete(it) : cur.selected.add(it); el.classList.toggle('sel'); paintSelbar(); return; }
     openItem(it, cur.shown);
   });
-  longPress(el, () => itemMenu(it));
+  longPress(el, () => menuFor(it));
 }
+const menuFor = (it) => (it.merged ? mergedMenu(it) : itemMenu(it));
 
 function marks(it) {
   return [isFavorite(it.conn, it.path) ? icon('star', 'mark fav') : null,
@@ -234,12 +293,13 @@ function marks(it) {
 }
 
 function row(it) {
-  const sub = cur.search ? subPath(it) : [fmtDate(it.mtime), it.isFolder || it.google ? '' : fmtSize(it.size)].filter(Boolean).join(' · ');
+  const sub = cur.search ? subPath(it) : it.merged ? it.conns.map(connName).join(', ')
+    : [cur.conn === 'alle' ? connName(it.conn) : '', fmtDate(it.mtime), it.isFolder || it.google ? '' : fmtSize(it.size)].filter(Boolean).join(' · ');
   const el = h('div.row.file', { role: 'button', tabindex: 0 },
     cur.selecting ? h('span.check', icon('check')) : null,
     h('span.ficon', thumbOrGlyph(it, 'm')),
     h('span.row-main', h('span.row-title', h('span.nm', it.name), marks(it)), h('small.row-sub', isEncrypted(it.path) && it.isFolder ? 'Verschlüsselt – nur am PC lesbar' : sub)),
-    cur.selecting ? null : h('button.more', { 'aria-label': 'Menü', onclick: (e) => { e.stopPropagation(); itemMenu(it); } }, icon('more')));
+    cur.selecting ? null : h('button.more', { 'aria-label': 'Menü', onclick: (e) => { e.stopPropagation(); menuFor(it); } }, icon('more')));
   itemHandlers(it, el);
   return el;
 }
@@ -248,7 +308,7 @@ function tile(it) {
   const el = h('div.tile', { role: 'button', tabindex: 0 },
     h('span.tvisual', thumbOrGlyph(it, 'm', true), cur.selecting ? h('span.check', icon('check')) : null),
     h('span.tname', it.name, marks(it)),
-    h('small.tsub', it.isFolder ? fmtDate(it.mtime, false) : fmtSize(it.size)));
+    h('small.tsub', it.merged && it.conns.length > 1 ? `in ${it.conns.length} Clouds` : it.isFolder ? fmtDate(it.mtime, false) : fmtSize(it.size)));
   itemHandlers(it, el);
   return el;
 }
@@ -272,7 +332,7 @@ function paintSelbar() {
 // ---------------------------------------------------------------- Öffnen, Menüs
 
 export function openItem(it, siblings) {
-  if (it.isFolder) { go(dirHash(it.conn, it.path)); return; }
+  if (it.isFolder) { go(it.merged ? allHash(it.path) : dirHash(it.conn, it.path)); return; }
   openPlayer(it, (siblings || [it]).filter((x) => !x.isFolder), { onMenu: itemMenu });
 }
 
@@ -394,7 +454,7 @@ function styleDialog(it) {
   const colors = h('div.swatches');
   const icons = h('div.iconpick');
   const paintAll = () => {
-    clear(preview).append(h('span.glyph.big', { style: { color: color || KIND_COLOR.folder } }, icon(FOLDER_ICON[ic || 'folder'])), h('b', it.name));
+    clear(preview).append(h('span.glyph.big', folderIcon({ color, icon: ic })), h('b', it.name));
     colors.replaceChildren(...FOLDER_COLORS.map((c) => h('button.swatch' + ((color || KIND_COLOR.folder) === c ? '.on' : ''), { style: { background: c }, 'aria-label': c, onclick: () => { color = c === KIND_COLOR.folder ? null : c; paintAll(); } })));
     icons.replaceChildren(...Object.keys(FOLDER_ICON).map((n) => h('button.ipick' + ((ic || 'folder') === n ? '.on' : ''), { 'aria-label': n, onclick: () => { ic = n === 'folder' ? null : n; paintAll(); } }, icon(FOLDER_ICON[n]))));
   };
@@ -402,7 +462,7 @@ function styleDialog(it) {
   const s = sheet(h('div.dialog-body', preview, h('div.label', 'Farbe'), colors, h('div.label', 'Symbol'), icons,
     h('div.btn-row',
       h('button.btn', { onclick: async () => { s.close(); await setFolderStyle(it, null, null); rerender(); } }, 'Standard'),
-      h('button.btn.primary', { onclick: async () => { s.close(); await setFolderStyle(it, color, ic); toast('Gespeichert – gilt auch am PC'); rerender(); } }, 'Übernehmen'))), { title: 'Farbe und Symbol' });
+      h('button.btn.primary', { onclick: async () => { s.close(); const n = await setFolderStyle(it, color, ic); toast(n > 1 ? `Gespeichert – in ${n} Clouds und am PC` : 'Gespeichert – gilt auch am PC'); rerender(); } }, 'Übernehmen'))), { title: 'Farbe und Symbol' });
 }
 
 async function protect(it) {

@@ -6,7 +6,7 @@ import { kv } from './db.js';
 import { mainConnection, source, ensureKeys } from './sources/registry.js';
 
 export const FILE = '/.orbitnas/einstellungen.json';
-const SINGLES = ['design', 'autoLock', 'showHiddenButton', 'appPin', 'security'];
+const SINGLES = ['design', 'autoLock', 'showHiddenButton', 'appPin', 'security', 'iconStyle'];
 const LISTS = ['folderStyles', 'favorites', 'hidden', 'ignored', 'readOnly', 'locks'];
 const KEEP_DAYS = 90;
 
@@ -147,6 +147,8 @@ export const appPin = () => (live(doc.appPin) && doc.appPin.hash ? doc.appPin : 
 export const security = () => (live(doc.security) && doc.security.hash ? doc.security : null);
 export const autoLockMinutes = () => (live(doc.autoLock) ? Number(doc.autoLock.minutes) || 0 : 0);
 export const showHiddenButton = () => (live(doc.showHiddenButton) ? doc.showHiddenButton.on !== false : true);
+/** Symbole gefüllt (Standard) oder nur als Umriss – wie am PC. */
+export const iconsFilled = () => !(live(doc.iconStyle) && doc.iconStyle.style === 'outline');
 export const sourceColor = (key) => { const e = doc.sourceColors?.[key]; return live(e) ? e.color : null; };
 
 export const entries = (list, cloud) => (doc[list] || []).filter((e) => live(e) && (!cloud || lc(e.cloud) === lc(cloud)));
@@ -183,6 +185,18 @@ export async function setEntry(list, cloud, path, value) {
   const e = value ? { ...base, ...value, t: now(), del: false } : { ...(i >= 0 ? arr[i] : base), t: now(), del: true };
   if (i >= 0) arr[i] = e; else arr.push(e);
   await changed();
+}
+
+/** Mehrere Einträge in einem Rutsch, alle mit derselben Zeit (z. B. Ordnerstil in allen Clouds). */
+export async function setEntries(list, changes) {
+  const t = now();
+  const arr = (doc[list] = doc[list] || []);
+  for (const { cloud, path, value } of changes) {
+    const i = arr.findIndex((e) => lc(e.cloud) === lc(cloud) && lc(e.path) === lc(path));
+    const e = value ? { cloud, path, ...value, t, del: false } : { ...(i >= 0 ? arr[i] : { cloud, path }), t, del: true };
+    if (i >= 0) arr[i] = e; else arr.push(e);
+  }
+  if (changes.length) await changed();
 }
 
 /** Nach Umbenennen/Verschieben: Einträge unter dem alten Pfad mitnehmen (Favoriten, Farben, PINs …). */

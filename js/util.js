@@ -107,8 +107,8 @@ export function kindOf(name, isFolder) {
   return 'other';
 }
 export const KIND_COLOR = {
-  folder: '#F5B544', image: '#EC4899', video: '#A855F7', audio: '#F97316', pdf: '#EF4444', document: '#3B82F6', sheet: '#22C55E',
-  slides: '#F59E0B', archive: '#B08968', code: '#14B8A6', text: '#94A3B8', program: '#64748B', other: '#94A3B8',
+  folder: '#F5B544', image: '#EC4899', video: '#A855F7', audio: '#F97316', pdf: '#EF4444', document: '#2B579A', sheet: '#217346',
+  slides: '#D24726', archive: '#F5B544', code: '#14B8A6', text: '#9CA3AF', program: '#3B82F6', other: '#9CA3AF',
 };
 export function typeName(name, kind) {
   return {
@@ -305,3 +305,6 @@ export function loadScript(src) {
     document.head.append(s);
   });
 }
+
+/** Pfad eines einfarbigen Symbols (für zusammengesetzte Symbole). */
+export const iconPath = (name) => P[name] || P.file;

@@ -93,6 +93,8 @@ function appearance(rerender) {
     h('div.row.block', h('div.label', 'Akzentfarbe'),
       h('div.swatches', ACCENTS.map((c) => h('button.swatch' + ((curAccent || '').toLowerCase() === c.toLowerCase() ? '.on' : ''), { style: { background: c }, 'aria-label': c, onclick: () => pick(curTheme, c) }))),
       h('div.row-input', custom, h('button.btn.small', { onclick: () => pick(curTheme, custom.value) }, 'Eigene Farbe'), h('button.btn.small', { onclick: () => pick(curTheme, null) }, 'Farbe des Designs'))),
+    toggleRow('Symbole gefüllt', 'Ordner und Dateien in voller Farbe. Aus: nur als Umriss. Gilt auch am PC.', store.iconsFilled(),
+      async (on) => { await store.setSingle('iconStyle', { style: on ? 'filled' : 'outline' }); toast('Gespeichert'); }),
     toggleRow('Knopf „Versteckte zeigen“', 'Im Menü eines Ordners. Ist er aus, bleiben Versteckte immer verborgen (auch am PC).', store.showHiddenButton(),
       async (on) => { await store.setSingle('showHiddenButton', { on }); if (!on) { settings.showHidden = false; saveSettings(); } toast('Gespeichert'); }));
 }

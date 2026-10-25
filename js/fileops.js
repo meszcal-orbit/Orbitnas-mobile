@@ -3,11 +3,12 @@
 
 import { h, icon, kindOf, kindIcon, KIND_COLOR, toast, confirmDialog, shareOrDownload, sheet } from './util.js';
 import { cache, kv } from './db.js';
-import { source, loadedSource, connById, connByKey, colorOf } from './sources/registry.js';
+import { source, loadedSource, connById, connByKey, colorOf, connections } from './sources/registry.js';
 import { relPath, joinPath, parentPath, baseName, uniqueName } from './sources/base.js';
 import * as store from './store.js';
 import { settings, unlocked } from './ui.js';
 import { addFiles } from './upload.js';
+import { typeIcon } from './typeicons.js';
 import { startOp } from './opsbar.js';
 
 export const SYSTEM = ['.orbitnas', '.mobil', '.versionen'];
@@ -55,11 +56,15 @@ export function glyph(it, big = false) {
     if (isEncrypted(it.path)) return h(cls, { style: { color: '#F59E0B' } }, icon('lock'));
     const lk = lockFor(it.conn, it.path);
     if (lk && lk.path.toLowerCase() === relPath(it.path).toLowerCase()) return h(cls, { style: { color: '#F59E0B' } }, icon('lock'));
-    const st = folderStyle(it.conn, it.path);
-    return h(cls, { style: { color: st?.color || KIND_COLOR.folder } }, icon(st?.icon ? FOLDER_ICON[st.icon] || 'folder' : 'folder'));
+    const st = it.style !== undefined ? it.style : folderStyle(it.conn, it.path);
+    return h(cls, folderIcon(st));
   }
-  const k = kindOf(it.name);
-  return h(cls, { style: { color: KIND_COLOR[k] } }, icon(kindIcon[k]));
+  return h(cls, typeIcon(kindOf(it.name), { filled: store.iconsFilled() }));
+}
+
+/** Ordnersymbol mit Farbe und Zeichen aus der Einstellungsdatei. */
+export function folderIcon(st, cls = '') {
+  return typeIcon('folder', { color: st?.color, mark: st?.icon ? FOLDER_ICON[st.icon] : null, filled: store.iconsFilled(), cls });
 }
 
 /** Vorschaubild, wenn die Cloud eins hat; sonst das Symbol. */
@@ -226,7 +231,27 @@ export const setHidden = (it, on) => store.setEntry('hidden', keyOf(it.conn), re
 export const setIgnored = (connId, path, on) => store.setEntry('ignored', keyOf(connId), relPath(path), on ? {} : null);
 export const setReadOnly = (it, on) => store.setEntry('readOnly', keyOf(it.conn), relPath(it.path), on ? { isFolder: !!it.isFolder } : null);
 export const setFavorite = (it, on) => store.setEntry('favorites', keyOf(it.conn), relPath(it.path), on ? { name: it.name, isFolder: !!it.isFolder } : null);
-export const setFolderStyle = (it, color, ic) => store.setEntry('folderStyles', keyOf(it.conn), relPath(it.path), color || ic ? { color: color || null, icon: ic || null } : null);
+/**
+ * Farbe/Symbol eines Ordners – gilt in jeder Cloud, in der derselbe Ordner (gleicher Pfad ab Wurzel) liegt.
+ * Alle Einträge bekommen dieselbe Zeit; Quellen nur am PC (lokal:) ergänzt der PC beim Abgleich.
+ */
+export async function setFolderStyle(it, color, ic) {
+  const path = relPath(it.path);
+  const value = color || ic ? { color: color || null, icon: ic || null } : null;
+  const keys = new Set([keyOf(it.conn)]);
+  await Promise.all(connections().filter((c) => c.id !== it.conn && c.type !== 'demo').map(async (c) => {
+    try {
+      if (!c.key || keys.has(c.key)) return;
+      if (path === '') { keys.add(c.key); return; }
+      const items = await listFolder(c.id, parentPath(it.path));
+      if (items.some((x) => x.isFolder && x.name.toLowerCase() === it.name.toLowerCase())) keys.add(c.key);
+    } catch { /* Cloud gerade nicht erreichbar oder Ordner fehlt dort */ }
+  }));
+  // Gibt es schon Stile für diesen Pfad in anderen Clouds (z. B. vom PC), werden sie ebenfalls angepasst
+  for (const e of store.entries('folderStyles')) if (e.path.toLowerCase() === path.toLowerCase()) keys.add(e.cloud);
+  await store.setEntries('folderStyles', [...keys].filter(Boolean).map((cloud) => ({ cloud, path, value })));
+  return keys.size;
+}
 export const setLock = (connId, path, r) => store.setEntry('locks', keyOf(connId), relPath(path), r ? { hash: r.hash, pinLength: r.length } : null);
 
 /** Favoriten dieses Geräts mit passender Quelle (Kennung aus der Einstellungsdatei). */
